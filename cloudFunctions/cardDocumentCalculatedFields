@@ -1,1 +1,3 @@
-tbd
+// Two fields calculated in this cloudFunction:
+// minimumPayment
+// isCurrent
