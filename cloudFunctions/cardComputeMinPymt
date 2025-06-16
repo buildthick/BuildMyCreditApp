@@ -1,2 +1,34 @@
 // Field calculated in this cloudFunction:
 // minimumPayment
+
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+exports.cardComputeMinPymt = functions
+  .region('us-central1')
+  .firestore
+  .document('user_credit_cards/{cardId}')
+  .onWrite(async (change, context) => {
+    const before = change.before.exists ? change.before.data() : null;
+    const after  = change.after.exists  ? change.after.data()  : null;
+
+    // Only proceed on create or actual totalBalance change
+    const oldBal = before ? before.totalBalance : null;
+    const newBal = after  ? after.totalBalance  : null;
+    if (newBal == null || oldBal === newBal) {
+      return null;
+    }
+
+    // Compute 10% of totalBalance
+    const newMin = newBal * 0.10;
+    const oldMin = after.minimumPayment;
+
+    // Skip if already correct
+    if (oldMin === newMin) {
+      return null;
+    }
+
+    // Write updated minimumPayment
+    return change.after.ref.update({ minimumPayment: newMin });
+  });
