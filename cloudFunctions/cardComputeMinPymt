@@ -10,25 +10,45 @@ exports.cardComputeMinPymt = functions
   .firestore
   .document('user_credit_cards/{cardId}')
   .onWrite(async (change, context) => {
-    const before = change.before.exists ? change.before.data() : null;
-    const after  = change.after.exists  ? change.after.data()  : null;
+    const beforeData = change.before.exists ? change.before.data() : null;
+    const afterData  = change.after.exists  ? change.after.data()  : null;
 
-    // Only proceed on create or actual totalBalance change
-    const oldBal = before ? before.totalBalance : null;
-    const newBal = after  ? after.totalBalance  : null;
-    if (newBal == null || oldBal === newBal) {
+    // If the doc was deleted, bail
+    if (!afterData) {
+      console.log(`cardComputeMinPymt: deleted, skipping ${context.params.cardId}`);
       return null;
     }
 
-    // Compute 10% of totalBalance
-    const newMin = newBal * 0.10;
-    const oldMin = after.minimumPayment;
+    const oldBalance = beforeData?.totalBalance;
+    const newBalance = afterData.totalBalance;
 
-    // Skip if already correct
+    // Skip if totalBalance is missing or hasn't changed
+    if (newBalance == null) {
+      console.log(`cardComputeMinPymt: totalBalance missing on ${context.params.cardId}, skipping`);
+      return null;
+    }
+    if (oldBalance === newBalance) {
+      console.log(`cardComputeMinPymt: totalBalance unchanged (${newBalance}) on ${context.params.cardId}, skipping`);
+      return null;
+    }
+
+    // Compute 10%
+    const newMin = newBalance * 0.10;
+    const oldMin = afterData.minimumPayment;
+
+    // Skip if already up-to-date
     if (oldMin === newMin) {
+      console.log(`cardComputeMinPymt: minimumPayment already ${newMin} on ${context.params.cardId}, skipping`);
       return null;
     }
 
-    // Write updated minimumPayment
-    return change.after.ref.update({ minimumPayment: newMin });
+    // Write it
+    try {
+      await change.after.ref.update({ minimumPayment: newMin });
+      console.log(`cardComputeMinPymt: updated minimumPayment → ${newMin} on ${context.params.cardId}`);
+    } catch (err) {
+      console.error(`cardComputeMinPymt: ERROR updating on ${context.params.cardId}:`, err);
+    }
+
+    return null;
   });
