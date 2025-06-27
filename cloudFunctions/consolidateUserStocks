@@ -5,66 +5,83 @@ const admin = require('firebase-admin');
 exports.consolidateUserStocks = functions
   .region('us-central1')
   .https.onCall(async (data, context) => {
-    // 1) Auth check
     const uid = context.auth && context.auth.uid;
     if (!uid) {
-      throw new functions.https.HttpsError(
-        'unauthenticated',
-        'Must be called while authenticated.'
-      );
+      throw new functions.https.HttpsError('unauthenticated',
+        'Must be called while authenticated.');
     }
 
     const db = admin.firestore();
     const userDocRef = db.doc(`users/${uid}`);
 
-    // 2) Query by the actual DocumentReference
+    // Hard pulls
     const pullsSnap = await db
       .collection('user_hard_pulls')
       .where('userRef', '==', userDocRef)
       .get();
+    await mapRequests(pullsSnap, db);
 
-    if (pullsSnap.empty) {
-      return { success: true, written: 0, message: 'No hard pulls to consolidate.' };
-    }
+    // Accounts
+    await mapAccounts('user_credit_cards', db, userDocRef);
+    await mapAccounts('user_loans',       db, userDocRef);
 
-    // 3) Map & write
-    const written = await mapRequests(pullsSnap, db);
-    return { success: true, written };
+    return { success: true };
   });
 
 async function mapRequests(snap, db) {
+  if (snap.empty) return;
   const batch = db.batch();
-  let writeCount = 0;
+  snap.docs.forEach(doc => {
+    const d = doc.data();
+    const consoRef = db.collection('user_stocks_conso').doc(doc.id);
+    const flatData = {
+      DOFRecord: d.dateOfRequest,
+      userRef:   d.userRef,
+      stock:     'user_hard_pulls',
+      subStock:  d.debtType,
+      lender:    d.lender,
+      name:      d.productName
+    };
+    batch.set(consoRef, flatData, { merge: true });
+  });
+  await batch.commit();
+}
+
+async function mapAccounts(collectionName, db, userDocRef) {
+  const snap = await db
+    .collection(collectionName)
+    .where('userRef', '==', userDocRef)
+    .get();
+  if (snap.empty) return;
+
+  const batch = db.batch();
 
   for (const doc of snap.docs) {
     const d = doc.data();
     const consoRef = db.collection('user_stocks_conso').doc(doc.id);
 
-    // Flat map of fields at the top level
     const flatData = {
-      DOFRecord: d.dateOfRequest,    // Firestore Timestamp
-      userRef:   d.userRef,          // Firestore DocumentReference
-      stockType: doc.ref.path,
-      subStock:  d.debtType,
+      DOFRecord: d.dateIssued,
+      userRef:   d.userRef,
+      stock:     collectionName,
+      subStock:  collectionName === 'user_credit_cards' ? 'Revolving' : 'Installment',
       lender:    d.lender,
-      name:      d.productName
+      name:      d.commercialName,
+      isCurrent: d.isCurrent,
+      isCFA:     d.isCFA      // now included for both cards & loans
     };
 
-    // Idempotency check
-    const existing = await consoRef.get();
-    if (
-      existing.exists &&
-      JSON.stringify(existing.data()) === JSON.stringify(flatData)
-    ) {
-      continue;
+    if (collectionName === 'user_credit_cards') {
+      flatData.isAnnualFee = d.isAnnualFee;
+      flatData.creditLimit  = d.creditLimit;
+      flatData.amountsOwed  = d.totalBalance;
+    } else {
+      flatData.creditLimit = d.principalOriginal;
+      flatData.amountsOwed = d.balance;
     }
 
     batch.set(consoRef, flatData, { merge: true });
-    writeCount++;
   }
 
-  if (writeCount > 0) {
-    await batch.commit();
-  }
-  return writeCount;
+  await batch.commit();
 }
