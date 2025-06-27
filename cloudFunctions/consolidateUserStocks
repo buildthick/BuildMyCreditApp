@@ -1,0 +1,97 @@
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+// admin.initializeApp() is called by your project’s setup
+
+/**
+ * Callable function to consolidate all “Requests” stock docs
+ * into the central `user_stocks_conso` collection, idempotently.
+ */
+exports.consolidateUserStocks = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    // 1) Authenticate
+    const uid = context.auth && context.auth.uid;
+    if (!uid) {
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'The function must be called while authenticated.'
+      );
+    }
+
+    const db = admin.firestore();
+
+    // 2) Load Requests subcollection
+    const requestsSnap = await db
+      .collection('users')
+      .doc(uid)
+      .collection('Requests')
+      .get();
+
+    if (requestsSnap.empty) {
+      return { success: true, written: 0, message: 'No Requests to consolidate.' };
+    }
+
+    // 3) Map & write them, idempotently
+    const written = await mapRequests(requestsSnap, db);
+
+    return { success: true, written };
+  });
+
+/**
+ * Maps each Requests doc into user_stocks_conso/{doc.id},
+ * merging only if data is new or changed.
+ *
+ * @param {FirebaseFirestore.QuerySnapshot} snap
+ * @param {FirebaseFirestore.Firestore} db
+ * @returns {Promise<number>} number of docs written
+ */
+async function mapRequests(snap, db) {
+  const batch = db.batch();
+  let writeCount = 0;
+
+  for (const doc of snap.docs) {
+    const d = doc.data();
+    const consoRef = db.collection('user_stocks_conso').doc(doc.id);
+
+    // Prepare only the mapped fields
+    const mapped = {
+      // Mapped fields live under `.data`
+      data: {
+        DOFRecord:    { __time__: d.dateOfRequest.__time__ },
+        userRef:      { __ref__: d.userRef.__ref__ },
+        stockType:    doc.ref.path,
+        subStock:     d.debtType,
+        lender:       d.lender,
+        name:         d.productName,
+        isCFA:        false,
+        isAnnualFee:  false,
+        isPaid:       false,
+        isCurrent:    false,
+        severity:     null,
+        creditLimit:  null,
+        amountsOwed:  null
+      },
+      __collections__: {}
+    };
+
+    // Read existing conso doc if any
+    const existingSnap = await consoRef.get();
+    if (existingSnap.exists) {
+      const existingData = existingSnap.get('data');
+      // Skip write if nothing changed
+      if (JSON.stringify(existingData) === JSON.stringify(mapped.data)) {
+        continue;
+      }
+    }
+
+    // Merge our mapped fields into the conso doc
+    batch.set(consoRef, mapped, { merge: true });
+    writeCount++;
+  }
+
+  if (writeCount > 0) {
+    await batch.commit();
+  }
+
+  return writeCount;
+}
