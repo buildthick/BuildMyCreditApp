@@ -7,10 +7,14 @@ exports.writeUserConstraintData = functions.region('us-central1').https.onCall(
     // 1) Auth check
     const uid = context.auth && context.auth.uid;
     if (!uid) {
-      throw new functions.https.HttpsError('unauthenticated', 'Must be signed in.');
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'Must be signed in.'
+      );
     }
 
     const db = admin.firestore();
+    const userRef = db.collection('Users').doc(uid);
 
     try {
       // 2) Load static templates
@@ -18,31 +22,43 @@ exports.writeUserConstraintData = functions.region('us-central1').https.onCall(
         .collection('plan_target_constraints')
         .get();
 
-      // 3) Load existing user copies
+      // 3) Load existing user-specific copies
       const userSnap = await db
         .collection('user_plan_target_constraints')
         .get();
-      const existingIds = new Set(userSnap.docs.map(doc => doc.id));
+      const existing = {};
+      userSnap.forEach(doc => {
+        existing[doc.id] = doc.data();
+      });
 
-      // 4) Batch new writes for missing docs
+      // 4) Batch writes only when userRef is missing or different
       const batch = db.batch();
       let written = 0;
 
       staticSnap.forEach(doc => {
         const id = doc.id;
-        if (!existingIds.has(id)) {
-          const src = doc.data();
+        const src = doc.data();
+        const old = existing[id];
+        const needsWrite = !old || old.userRef?.id !== uid;
+
+        if (needsWrite) {
           const destRef = db
             .collection('user_plan_target_constraints')
             .doc(id);
 
-          // Copy static fields verbatim
-          batch.set(destRef, src);
+          batch.set(
+            destRef,
+            {
+              ...src,
+              userRef: userRef
+            },
+            { merge: true }
+          );
           written++;
         }
       });
 
-      // 5) Commit if needed
+      // 5) Commit batch if there are writes
       if (written > 0) {
         await batch.commit();
       }
