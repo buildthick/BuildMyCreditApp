@@ -1,3 +1,8 @@
+// This cloud function imports the static fields for the collection, then adds userRef,
+// then adds the target_date (converted to UNIX ms in double data type)
+// from the users collection to the Interval field for docs
+// where Dependency_Type = Action latest date
+
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 // To avoid deployment errors, do not call admin.initializeApp() in your code
