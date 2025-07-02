@@ -7,31 +7,41 @@ exports.writeUserConstraintData = functions.region('us-central1').https.onCall(
     // 1) Auth check
     const uid = context.auth && context.auth.uid;
     if (!uid) {
-      throw new functions.https.HttpsError(
-        'unauthenticated',
-        'Must be signed in.'
-      );
+      throw new functions.https.HttpsError('unauthenticated', 'Must be signed in.');
     }
 
     const db = admin.firestore();
-    const userRef = db.collection('Users').doc(uid);
+    const userRef = db.collection('users').doc(uid);
 
     try {
-      // 2) Load static templates
+      // 2) Load user's target_date and convert to ms
+      const userSnap = await userRef.get();
+      if (!userSnap.exists || !userSnap.data().target_date) {
+        throw new functions.https.HttpsError(
+          'failed-precondition',
+          'User document is missing a target_date field.'
+        );
+      }
+      const rawTarget = userSnap.data().target_date;
+      const targetMs = rawTarget.toMillis
+        ? rawTarget.toMillis()
+        : new Date(rawTarget).getTime();
+
+      // 3) Load static templates
       const staticSnap = await db
         .collection('plan_target_constraints')
         .get();
 
-      // 3) Load existing user-specific copies
-      const userSnap = await db
+      // 4) Load existing user-specific copies
+      const userSnap2 = await db
         .collection('user_plan_target_constraints')
         .get();
       const existing = {};
-      userSnap.forEach(doc => {
+      userSnap2.forEach(doc => {
         existing[doc.id] = doc.data();
       });
 
-      // 4) Batch writes only when userRef is missing or different
+      // 5) Batch writes for missing docs, missing userRef, or outdated Interval
       const batch = db.batch();
       let written = 0;
 
@@ -39,7 +49,17 @@ exports.writeUserConstraintData = functions.region('us-central1').https.onCall(
         const id = doc.id;
         const src = doc.data();
         const old = existing[id];
-        const needsWrite = !old || old.userRef?.id !== uid;
+
+        // Determine new Interval
+        const newInterval = src.Dependency_Type === 'Action latest date'
+          ? targetMs
+          : src.Interval;
+
+        // Check if write is needed
+        const needsWrite = 
+          !old ||
+          old.userRef?.id !== uid ||
+          old.Interval !== newInterval;
 
         if (needsWrite) {
           const destRef = db
@@ -50,7 +70,8 @@ exports.writeUserConstraintData = functions.region('us-central1').https.onCall(
             destRef,
             {
               ...src,
-              userRef: userRef
+              userRef: userRef,
+              Interval: newInterval
             },
             { merge: true }
           );
@@ -58,14 +79,14 @@ exports.writeUserConstraintData = functions.region('us-central1').https.onCall(
         }
       });
 
-      // 5) Commit batch if there are writes
+      // 6) Commit batch if needed
       if (written > 0) {
         await batch.commit();
       }
 
       return { success: true, attempted: staticSnap.size, written };
     } catch (err) {
-      console.error('Error copying constraints:', err);
+      console.error('Error in writeUserConstraintData:', err);
       throw new functions.https.HttpsError(
         'internal',
         err.message || 'Unknown error'
