@@ -4,90 +4,55 @@ const admin = require('firebase-admin');
 
 exports.writeUserConstraintData = functions.region('us-central1').https.onCall(
   async (data, context) => {
-    // Authentication check
+    // 1) Auth check
     const uid = context.auth && context.auth.uid;
     if (!uid) {
-      throw new functions.https.HttpsError(
-        'unauthenticated',
-        'The function must be called while authenticated.'
-      );
+      throw new functions.https.HttpsError('unauthenticated', 'Must be signed in.');
     }
 
     const db = admin.firestore();
-    const userRef = db.collection('Users').doc(uid);
 
     try {
-      // Load user's target_date
-      const userSnap = await userRef.get();
-      if (!userSnap.exists || !userSnap.data().target_date) {
-        throw new functions.https.HttpsError(
-          'failed-precondition',
-          'User document is missing a target_date field.'
-        );
-      }
-      const rawTarget = userSnap.data().target_date;
-      const targetMs = rawTarget.toMillis
-        ? rawTarget.toMillis()
-        : new Date(rawTarget).getTime();
-
-      // Read static templates
+      // 2) Load static templates
       const staticSnap = await db
         .collection('plan_target_constraints')
         .get();
 
-      // Read existing user-specific copies
-      const userConstraintsSnap = await db
+      // 3) Load existing user copies
+      const userSnap = await db
         .collection('user_plan_target_constraints')
         .get();
-      const existing = {};
-      userConstraintsSnap.forEach(doc => {
-        existing[doc.id] = doc.data();
-      });
+      const existingIds = new Set(userSnap.docs.map(doc => doc.id));
 
-      // Prepare batch
+      // 4) Batch new writes for missing docs
       const batch = db.batch();
-      let writes = 0;
+      let written = 0;
 
-      staticSnap.forEach((doc) => {
-        const src = doc.data();
-        const destRef = db
-          .collection('user_plan_target_constraints')
-          .doc(doc.id);
+      staticSnap.forEach(doc => {
+        const id = doc.id;
+        if (!existingIds.has(id)) {
+          const src = doc.data();
+          const destRef = db
+            .collection('user_plan_target_constraints')
+            .doc(id);
 
-        // Build desired document
-        const desired = {
-          ...src,
-          userRef: userRef,
-          Interval:
-            src.Dependency_Type === 'Action latest date'
-              ? targetMs
-              : src.Interval
-        };
-
-        // Compare to existing
-        const old = existing[doc.id];
-        const isDifferent = !old ||
-          old.Interval !== desired.Interval ||
-          old.Dependency_Type !== desired.Dependency_Type;
-          // add more field comparisons here if needed
-
-        if (isDifferent) {
-          batch.set(destRef, desired);
-          writes++;
+          // Copy static fields verbatim
+          batch.set(destRef, src);
+          written++;
         }
       });
 
-      // Commit if there are writes
-      if (writes > 0) {
+      // 5) Commit if needed
+      if (written > 0) {
         await batch.commit();
       }
 
-      return { success: true, attempted: staticSnap.size, written: writes };
+      return { success: true, attempted: staticSnap.size, written };
     } catch (err) {
-      console.error('Error writing user constraint data:', err);
+      console.error('Error copying constraints:', err);
       throw new functions.https.HttpsError(
         'internal',
-        err.message || 'An unknown error occurred.'
+        err.message || 'Unknown error'
       );
     }
   }
