@@ -4,6 +4,8 @@
 // AccountType_Variation = Utilization
 // AccountType_Variation = Number of CFA or AF Cards with 0 Balance
     // NOTE: this^ returns null if no CFA/AFs exist, and 0 when at least 1 exists but has 0 balance
+// AccountType_Variation = Minimum 1 loan
+// AccountType_Variation = Minimum 1 card
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
@@ -14,7 +16,7 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
     // 1) Auth check
     const uid = context.auth && context.auth.uid;
     if (!uid) {
-      throw new functions.https.HttpsError('unauthenticated', 'Must be signed in.');
+      throw new functions.https.HttpsError('unauthenticated','Must be signed in.');
     }
     const db = admin.firestore();
 
@@ -22,14 +24,14 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
       // --- 1) Current Accounts / Lates ratio ---
       const currentSnap = await db
         .collection('user_stocks_conso')
-        .where('stock', 'in', ['user_credit_cards', 'user_loans'])
-        .where('isCurrent', '==', true)
+        .where('stock','in',['user_credit_cards','user_loans'])
+        .where('isCurrent','==',true)
         .get();
       const numberCurrentAccounts = currentSnap.size;
 
       const latesSnap = await db
         .collection('user_stocks_conso')
-        .where('stock', 'in', [
+        .where('stock','in',[
           'user_credit_cards_late_payments',
           'user_loans_late_payments',
           'user_collections_3rd_party'
@@ -37,21 +39,20 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         .get();
       const numberLates = latesSnap.size;
 
-      const rawCAL = numberLates === 0
+      const rawCAL = numberLates===0
         ? numberCurrentAccounts
-        : numberCurrentAccounts / numberLates;
+        : numberCurrentAccounts/numberLates;
       const calRatio = parseFloat(rawCAL.toFixed(4));
 
       // --- 2) Revolving % of total ---
       const revSnap = await db
         .collection('user_stocks_conso')
-        .where('subStock', '==', 'Revolving')
+        .where('subStock','==','Revolving')
         .get();
-      let totalRevolving = 0;
-      let revDocs = [];
-      revSnap.forEach(doc => {
-        const s = doc.data().stock;
-        if (s !== 'user_hard_pulls' && s !== 'user_credit_cards_late_payments') {
+      let totalRevolving=0, revDocs=[];
+      revSnap.forEach(doc=>{
+        const s=doc.data().stock;
+        if(s!=='user_hard_pulls'&&s!=='user_credit_cards_late_payments'){
           totalRevolving++;
           revDocs.push(doc);
         }
@@ -59,143 +60,103 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
 
       const instSnap = await db
         .collection('user_stocks_conso')
-        .where('subStock', '==', 'Installment')
+        .where('subStock','==','Installment')
         .get();
-      let totalInstallment = 0;
-      instSnap.forEach(doc => {
-        const s = doc.data().stock;
-        if (s !== 'user_hard_pulls' && s !== 'user_loans_late_payments') {
+      let totalInstallment=0;
+      instSnap.forEach(doc=>{
+        const s=doc.data().stock;
+        if(s!=='user_hard_pulls'&&s!=='user_loans_late_payments'){
           totalInstallment++;
         }
       });
 
-      const totalAccounts = totalRevolving + totalInstallment;
-      const rawRevPct = totalAccounts === 0
-        ? 0
-        : totalRevolving / totalAccounts;
-      const revPct = parseFloat(rawRevPct.toFixed(4));
+      const totalAccounts=totalRevolving+totalInstallment;
+      const rawRevPct= totalAccounts===0?0:totalRevolving/totalAccounts;
+      const revPct=parseFloat(rawRevPct.toFixed(4));
 
-      // --- 3) Utilization (balance ÷ credit limit) ---
-      let totalRevolvingCreditLimit = 0;
-      let totalBalance = 0;
-      revDocs.forEach(doc => {
-        const d = doc.data();
-        totalRevolvingCreditLimit += (d.creditLimit || 0);
-        totalBalance += (d.amountsOwed || 0);
+      // --- 3) Utilization ---
+      let totalCreditLimit=0,totalBalance=0;
+      revDocs.forEach(doc=>{
+        const d=doc.data();
+        totalCreditLimit += d.creditLimit||0;
+        totalBalance     += d.amountsOwed||0;
       });
-
-      const rawUtil = totalRevolvingCreditLimit === 0
-        ? 0
-        : totalBalance / totalRevolvingCreditLimit;
+      const rawUtil = totalCreditLimit===0?0:totalBalance/totalCreditLimit;
       const utilization = parseFloat(rawUtil.toFixed(4));
 
       // --- 4) Number of CFA or AF Cards with 0 Balance ---
-      // Count ALL Annual Fee cards
-      const allAFSnap = await db
+      const afSnap = await db
         .collection('user_stocks_conso')
-        .where('stock', '==', 'user_credit_cards')
-        .where('isAnnualFee', '==', true)
+        .where('stock','==','user_credit_cards')
+        .where('isAnnualFee','==',true)
         .get();
-      const totalAF = allAFSnap.size;
-
-      // Count ALL CFA cards
-      const allCFASnap = await db
+      const totalAF = afSnap.size;
+      const cfaSnap = await db
         .collection('user_stocks_conso')
-        .where('stock', '==', 'user_credit_cards')
-        .where('isCFA', '==', true)
+        .where('stock','==','user_credit_cards')
+        .where('isCFA','==',true)
         .get();
-      const totalCFA = allCFASnap.size;
-
+      const totalCFA = cfaSnap.size;
       const totalCFA_AF = totalAF + totalCFA;
 
-      // Count zero‐balance among those
-      const zeroBalanceSnap = await db
+      const zeroBalSnap = await db
         .collection('user_stocks_conso')
-        .where('stock', '==', 'user_credit_cards')
-        .where('amountsOwed', '==', 0)
+        .where('stock','==','user_credit_cards')
+        .where('amountsOwed','==',0)
         .get();
       let numZeroBalanceCFAorAF = 0;
-      zeroBalanceSnap.forEach(doc => {
-        const d = doc.data();
-        if (d.isAnnualFee === true || d.isCFA === true) {
-          numZeroBalanceCFAorAF++;
-        }
+      zeroBalSnap.forEach(doc=>{
+        const d=doc.data();
+        if(d.isAnnualFee||d.isCFA) numZeroBalanceCFAorAF++;
       });
+      const valueCFA_AF = totalCFA_AF===0? null : numZeroBalanceCFAorAF;
 
-      // Decide what to write: null if no AF/CFA cards at all
-      const valueToWrite = totalCFA_AF === 0
-        ? null
-        : numZeroBalanceCFAorAF;
+      // --- 5) Minimum 1 loan ---
+      const loansSnap = await db
+        .collection('user_stocks_conso')
+        .where('stock','==','user_loans')
+        .get();
+      const numLoans = loansSnap.size;
+
+      // --- 6) Minimum 1 card ---
+      const cardsSnap = await db
+        .collection('user_stocks_conso')
+        .where('stock','==','user_credit_cards')
+        .get();
+      const numCards = cardsSnap.size;
 
       // --- Prepare batch updates ---
       const batch = db.batch();
 
-      // Update Current Accounts / Lates
-      const calConstraints = await db
-        .collection('user_plan_target_constraints')
-        .where('AccountType_Variation', '==', 'Current accounts / lates')
-        .get();
-      calConstraints.forEach(doc => {
-        if (doc.data().Current_Value !== calRatio) {
-          batch.set(
-            db.collection('user_plan_target_constraints').doc(doc.id),
-            { Current_Value: calRatio },
-            { merge: true }
-          );
-        }
-      });
+      // mapping of variation to computed value
+      const mapping = {
+        'Current accounts / lates': calRatio,
+        'Revolving % of total': revPct,
+        'Utilization': utilization,
+        'Number of CFA or AF Cards with 0 Balance': valueCFA_AF,
+        'Minimum 1 loan': numLoans,
+        'Minimum 1 card': numCards
+      };
 
-      // Update Revolving % of total
-      const revConstraints = await db
-        .collection('user_plan_target_constraints')
-        .where('AccountType_Variation', '==', 'Revolving % of total')
-        .get();
-      revConstraints.forEach(doc => {
-        if (doc.data().Current_Value !== revPct) {
-          batch.set(
-            db.collection('user_plan_target_constraints').doc(doc.id),
-            { Current_Value: revPct },
-            { merge: true }
-          );
-        }
-      });
+      // update each constraint type
+      for (const [variation, value] of Object.entries(mapping)) {
+        const snap = await db
+          .collection('user_plan_target_constraints')
+          .where('AccountType_Variation','==',variation)
+          .get();
+        snap.forEach(doc=>{
+          const old = doc.data().Current_Value;
+          if (old !== value) {
+            batch.set(
+              db.collection('user_plan_target_constraints').doc(doc.id),
+              { Current_Value: value },
+              { merge: true }
+            );
+          }
+        });
+      }
 
-      // Update Utilization
-      const utilConstraints = await db
-        .collection('user_plan_target_constraints')
-        .where('AccountType_Variation', '==', 'Utilization')
-        .get();
-      utilConstraints.forEach(doc => {
-        if (doc.data().Current_Value !== utilization) {
-          batch.set(
-            db.collection('user_plan_target_constraints').doc(doc.id),
-            { Current_Value: utilization },
-            { merge: true }
-          );
-        }
-      });
-
-      // Update Number of CFA or AF Cards with 0 Balance
-      const zeroBalConstraints = await db
-        .collection('user_plan_target_constraints')
-        .where(
-          'AccountType_Variation',
-          '==',
-          'Number of CFA or AF Cards with 0 Balance'
-        )
-        .get();
-      zeroBalConstraints.forEach(doc => {
-        const old = doc.data().Current_Value;
-        if (old !== valueToWrite) {
-          batch.set(
-            db.collection('user_plan_target_constraints').doc(doc.id),
-            { Current_Value: valueToWrite },
-            { merge: true }
-          );
-        }
-      });
-
-      // Commit all updates
+      // commit all updates
       await batch.commit();
 
       return {
@@ -212,14 +173,13 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         totalCFA,
         totalCFA_AF,
         numZeroBalanceCFAorAF,
-        writtenValue: valueToWrite
+        valueCFA_AF,
+        numLoans,
+        numCards
       };
-    } catch (err) {
-      console.error('Error computing current values:', err);
-      throw new functions.https.HttpsError(
-        'internal',
-        err.message || 'Unknown error'
-      );
+    } catch(err) {
+      console.error('Error computing current values:',err);
+      throw new functions.https.HttpsError('internal',err.message||'Unknown');
     }
   }
 );
