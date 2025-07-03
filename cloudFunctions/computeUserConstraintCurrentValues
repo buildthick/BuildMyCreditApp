@@ -2,6 +2,8 @@
 // AccountType_Variation = Current accounts / lates AND
 // AccountType_Variation = Revolving % of total
 // AccountType_Variation = Utilization
+// AccountType_Variation = Number of CFA or AF Cards with 0 Balance
+    // NOTE: this^ returns null if no CFA/AFs exist, and 0 when at least 1 exists but has 0 balance
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
@@ -17,7 +19,7 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
     const db = admin.firestore();
 
     try {
-      // --- Compute Current Accounts / Lates ratio ---
+      // --- 1) Current Accounts / Lates ratio ---
       const currentSnap = await db
         .collection('user_stocks_conso')
         .where('stock', 'in', ['user_credit_cards', 'user_loans'])
@@ -40,7 +42,7 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         : numberCurrentAccounts / numberLates;
       const calRatio = parseFloat(rawCAL.toFixed(4));
 
-      // --- Compute Revolving % of total ---
+      // --- 2) Revolving % of total ---
       const revSnap = await db
         .collection('user_stocks_conso')
         .where('subStock', '==', 'Revolving')
@@ -73,20 +75,57 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         : totalRevolving / totalAccounts;
       const revPct = parseFloat(rawRevPct.toFixed(4));
 
-      // --- Compute Utilization ---
-      // Use same revDocs for revolving accounts
+      // --- 3) Utilization (balance ÷ credit limit) ---
       let totalRevolvingCreditLimit = 0;
       let totalBalance = 0;
       revDocs.forEach(doc => {
-        const data = doc.data();
-        totalRevolvingCreditLimit += (data.creditLimit || 0);
-        totalBalance += (data.amountsOwed || 0);
+        const d = doc.data();
+        totalRevolvingCreditLimit += (d.creditLimit || 0);
+        totalBalance += (d.amountsOwed || 0);
       });
 
       const rawUtil = totalRevolvingCreditLimit === 0
         ? 0
         : totalBalance / totalRevolvingCreditLimit;
       const utilization = parseFloat(rawUtil.toFixed(4));
+
+      // --- 4) Number of CFA or AF Cards with 0 Balance ---
+      // Count ALL Annual Fee cards
+      const allAFSnap = await db
+        .collection('user_stocks_conso')
+        .where('stock', '==', 'user_credit_cards')
+        .where('isAnnualFee', '==', true)
+        .get();
+      const totalAF = allAFSnap.size;
+
+      // Count ALL CFA cards
+      const allCFASnap = await db
+        .collection('user_stocks_conso')
+        .where('stock', '==', 'user_credit_cards')
+        .where('isCFA', '==', true)
+        .get();
+      const totalCFA = allCFASnap.size;
+
+      const totalCFA_AF = totalAF + totalCFA;
+
+      // Count zero‐balance among those
+      const zeroBalanceSnap = await db
+        .collection('user_stocks_conso')
+        .where('stock', '==', 'user_credit_cards')
+        .where('amountsOwed', '==', 0)
+        .get();
+      let numZeroBalanceCFAorAF = 0;
+      zeroBalanceSnap.forEach(doc => {
+        const d = doc.data();
+        if (d.isAnnualFee === true || d.isCFA === true) {
+          numZeroBalanceCFAorAF++;
+        }
+      });
+
+      // Decide what to write: null if no AF/CFA cards at all
+      const valueToWrite = totalCFA_AF === 0
+        ? null
+        : numZeroBalanceCFAorAF;
 
       // --- Prepare batch updates ---
       const batch = db.batch();
@@ -136,6 +175,26 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         }
       });
 
+      // Update Number of CFA or AF Cards with 0 Balance
+      const zeroBalConstraints = await db
+        .collection('user_plan_target_constraints')
+        .where(
+          'AccountType_Variation',
+          '==',
+          'Number of CFA or AF Cards with 0 Balance'
+        )
+        .get();
+      zeroBalConstraints.forEach(doc => {
+        const old = doc.data().Current_Value;
+        if (old !== valueToWrite) {
+          batch.set(
+            db.collection('user_plan_target_constraints').doc(doc.id),
+            { Current_Value: valueToWrite },
+            { merge: true }
+          );
+        }
+      });
+
       // Commit all updates
       await batch.commit();
 
@@ -148,9 +207,12 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         totalInstallment,
         totalAccounts,
         revPct,
-        totalRevolvingCreditLimit,
-        totalBalance,
-        utilization
+        utilization,
+        totalAF,
+        totalCFA,
+        totalCFA_AF,
+        numZeroBalanceCFAorAF,
+        writtenValue: valueToWrite
       };
     } catch (err) {
       console.error('Error computing current values:', err);
