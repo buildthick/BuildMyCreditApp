@@ -6,6 +6,7 @@
     // NOTE: this^ returns null if no CFA/AFs exist, and 0 when at least 1 exists but has 0 balance
 // AccountType_Variation = Minimum 1 loan
 // AccountType_Variation = Minimum 1 card
+// AccountType_Variation = Latest allowable open
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
@@ -19,6 +20,24 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
       throw new functions.https.HttpsError('unauthenticated','Must be signed in.');
     }
     const db = admin.firestore();
+
+    // Helper: get Y/M/D in America/New_York for a Date
+    function getNYCDateParts(date) {
+      const fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+      });
+      const parts = fmt.formatToParts(date);
+      let y, m, d;
+      for (const p of parts) {
+        if (p.type === 'year')  y = +p.value;
+        if (p.type === 'month') m = +p.value;
+        if (p.type === 'day')   d = +p.value;
+      }
+      return { y, m, d };
+    }
 
     try {
       // --- 1) Current Accounts / Lates ratio ---
@@ -74,7 +93,7 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
       const rawRevPct= totalAccounts===0?0:totalRevolving/totalAccounts;
       const revPct=parseFloat(rawRevPct.toFixed(4));
 
-      // --- 3) Utilization ---
+      // --- 3) Utilization (balance ÷ credit limit) ---
       let totalCreditLimit=0,totalBalance=0;
       revDocs.forEach(doc=>{
         const d=doc.data();
@@ -98,14 +117,13 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         .get();
       const totalCFA = cfaSnap.size;
       const totalCFA_AF = totalAF + totalCFA;
-
-      const zeroBalSnap = await db
+      const zbSnap = await db
         .collection('user_stocks_conso')
         .where('stock','==','user_credit_cards')
         .where('amountsOwed','==',0)
         .get();
-      let numZeroBalanceCFAorAF = 0;
-      zeroBalSnap.forEach(doc=>{
+      let numZeroBalanceCFAorAF=0;
+      zbSnap.forEach(doc=>{
         const d=doc.data();
         if(d.isAnnualFee||d.isCFA) numZeroBalanceCFAorAF++;
       });
@@ -125,10 +143,29 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         .get();
       const numCards = cardsSnap.size;
 
-      // --- Prepare batch updates ---
+      // --- 7) Latest allowable open (NYC-local month/day math) ---
+      const now = new Date();
+      const nowParts = getNYCDateParts(now);
+      // build local-midnight Date in function host for that NYC date
+      const nowNorm = new Date(nowParts.y, nowParts.m - 1, nowParts.d);
+
+      const latestSnap = await db
+        .collection('user_plan_target_constraints')
+        .where('AccountType_Variation','==','Latest allowable open')
+        .get();
+      const latestEntries = [];
+      latestSnap.forEach(doc=>{
+        const d = doc.data();
+        latestEntries.push({
+          id: doc.id,
+          interval: d.Interval,
+          old: d.Current_Value
+        });
+      });
+
       const batch = db.batch();
 
-      // mapping of variation to computed value
+      // update metrics 1–6
       const mapping = {
         'Current accounts / lates': calRatio,
         'Revolving % of total': revPct,
@@ -137,16 +174,13 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         'Minimum 1 loan': numLoans,
         'Minimum 1 card': numCards
       };
-
-      // update each constraint type
       for (const [variation, value] of Object.entries(mapping)) {
         const snap = await db
           .collection('user_plan_target_constraints')
           .where('AccountType_Variation','==',variation)
           .get();
         snap.forEach(doc=>{
-          const old = doc.data().Current_Value;
-          if (old !== value) {
+          if (doc.data().Current_Value !== value) {
             batch.set(
               db.collection('user_plan_target_constraints').doc(doc.id),
               { Current_Value: value },
@@ -156,30 +190,53 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         });
       }
 
+      // update Latest allowable open with NYC-local dayDiff
+      latestEntries.forEach(({ id, interval, old }) => {
+        const targetRaw = new Date(interval);
+        const tgtParts = getNYCDateParts(targetRaw);
+        const tgtNorm = new Date(tgtParts.y, tgtParts.m - 1, tgtParts.d);
+
+        // whole months difference
+        let yearDiff  = tgtNorm.getFullYear()  - nowNorm.getFullYear();
+        let monthDiff = tgtNorm.getMonth()     - nowNorm.getMonth();
+        let totalMonths = yearDiff * 12 + monthDiff;
+
+        // day remainder using local getDate()
+        let dayDiff = tgtNorm.getDate() - nowNorm.getDate();
+        if (dayDiff < 0) {
+          totalMonths--;
+          const daysInPrev = new Date(
+            tgtNorm.getFullYear(),
+            tgtNorm.getMonth(),
+            0
+          ).getDate();
+          dayDiff += daysInPrev;
+        }
+
+        const daysInMonth = new Date(
+          tgtNorm.getFullYear(),
+          tgtNorm.getMonth() + 1,
+          0
+        ).getDate();
+        const precise = totalMonths + dayDiff / daysInMonth;
+        const months = parseFloat(precise.toFixed(2));
+
+        if (old !== months) {
+          batch.set(
+            db.collection('user_plan_target_constraints').doc(id),
+            { Current_Value: months },
+            { merge: true }
+          );
+        }
+      });
+
       // commit all updates
       await batch.commit();
 
-      return {
-        success: true,
-        numberCurrentAccounts,
-        numberLates,
-        calRatio,
-        totalRevolving,
-        totalInstallment,
-        totalAccounts,
-        revPct,
-        utilization,
-        totalAF,
-        totalCFA,
-        totalCFA_AF,
-        numZeroBalanceCFAorAF,
-        valueCFA_AF,
-        numLoans,
-        numCards
-      };
-    } catch(err) {
-      console.error('Error computing current values:',err);
-      throw new functions.https.HttpsError('internal',err.message||'Unknown');
+      return { success: true };
+    } catch (err) {
+      console.error('Error computing current values:', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Unknown error');
     }
   }
 );
