@@ -1,4 +1,4 @@
-// This version correctly computes Current_Value where
+// This version correctly computes group 1 (open and close action constraints) Current_Value where
 // AccountType_Variation = Current accounts / lates AND
 // AccountType_Variation = Revolving % of total
 // AccountType_Variation = Utilization
@@ -10,6 +10,7 @@
 // AccountType_Variation = Latest allowable close
 // AccountType_Variation = Yearly allowable
 // AccountType_Variation = Monthly allowable
+// AccountType_Variation = Min interval between opens in LTM
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
@@ -20,11 +21,11 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
     // 1) Auth check
     const uid = context.auth && context.auth.uid;
     if (!uid) {
-      throw new functions.https.HttpsError('unauthenticated','Must be signed in.');
+      throw new functions.https.HttpsError('unauthenticated', 'Must be signed in.');
     }
     const db = admin.firestore();
 
-    // Helper: extract NYC local year/month/day from a Date
+    // Helper: extract NYC local Y/M/D
     function getNYCDateParts(date) {
       const fmt = new Intl.DateTimeFormat('en-US', {
         timeZone: 'America/New_York',
@@ -46,14 +47,14 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
       // --- 1) Current Accounts / Lates ratio ---
       const currentSnap = await db
         .collection('user_stocks_conso')
-        .where('stock','in',['user_credit_cards','user_loans'])
-        .where('isCurrent','==',true)
+        .where('stock', 'in', ['user_credit_cards','user_loans'])
+        .where('isCurrent', '==', true)
         .get();
       const numberCurrentAccounts = currentSnap.size;
 
       const latesSnap = await db
         .collection('user_stocks_conso')
-        .where('stock','in',[
+        .where('stock', 'in', [
           'user_credit_cards_late_payments',
           'user_loans_late_payments',
           'user_collections_3rd_party'
@@ -69,9 +70,10 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
       // --- 2) Revolving % of total ---
       const revSnap = await db
         .collection('user_stocks_conso')
-        .where('subStock','==','Revolving')
+        .where('subStock', '==', 'Revolving')
         .get();
-      let totalRevolving = 0, revDocs = [];
+      let totalRevolving = 0;
+      const revDocs = [];
       revSnap.forEach(doc => {
         const s = doc.data().stock;
         if (s !== 'user_hard_pulls' && s !== 'user_credit_cards_late_payments') {
@@ -82,7 +84,7 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
 
       const instSnap = await db
         .collection('user_stocks_conso')
-        .where('subStock','==','Installment')
+        .where('subStock', '==', 'Installment')
         .get();
       let totalInstallment = 0;
       instSnap.forEach(doc => {
@@ -237,32 +239,54 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
       // --- 9) Monthly allowable (opened <30 days) ---
       const nowMs = Date.now();
       const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
-      const cardDocs30 = await db
-        .collection('user_stocks_conso')
-        .where('stock','==','user_credit_cards')
-        .get();
       let numberCards30 = 0;
-      cardDocs30.forEach(doc => {
+      cardDocsLTM.forEach(doc => {
         const recMs = doc.data().DOFRecord.toDate().getTime();
         if (nowMs - recMs < THIRTY_DAYS) numberCards30++;
       });
 
-      const loanDocs30 = await db
-        .collection('user_stocks_conso')
-        .where('stock','==','user_loans')
-        .get();
       let numberLoans30 = 0;
-      loanDocs30.forEach(doc => {
+      loanDocsLTM.forEach(doc => {
         const recMs = doc.data().DOFRecord.toDate().getTime();
         if (nowMs - recMs < THIRTY_DAYS) numberLoans30++;
       });
 
       const monthlyAllowable = numberCards30 + numberLoans30;
 
-      // --- Batch writes for all metrics ---
+      // --- 10) Min interval between opens in LTM ---
+      // threshold = nowNorm minus 12 months
+      const thresh = new Date(nowNorm);
+      thresh.setMonth(thresh.getMonth() - 12);
+      const threshNorm = new Date(thresh.getFullYear(), thresh.getMonth(), thresh.getDate());
+
+      // gather all open docs
+      const openSnap = await db
+        .collection('user_stocks_conso')
+        .where('stock','in',['user_credit_cards','user_loans'])
+        .get();
+
+      const dates = openSnap.docs
+        .map(doc => {
+          const d = doc.data().DOFRecord.toDate();
+          const { y, m, d: day } = getNYCDateParts(d);
+          return new Date(y, m - 1, day);
+        })
+        .filter(d => d > threshNorm)
+        .sort((a, b) => a - b);
+
+      let minDiffDays = Infinity;
+      for (let i = 1; i < dates.length; i++) {
+        const diff = (dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24);
+        if (diff < minDiffDays) minDiffDays = diff;
+      }
+      const minInterval = dates.length < 2
+        ? null
+        : parseFloat((minDiffDays / 30).toFixed(2));
+
+      // --- Batch write all metrics ---
       const batch = db.batch();
 
-      // mapping 1–6
+      // write 1–6
       const mapping = {
         'Current accounts / lates': calRatio,
         'Revolving % of total': revPct,
@@ -287,16 +311,16 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         });
       }
 
-      // open & close
-      const openSnap = await db
+      // write open & close
+      const openVarSnap = await db
         .collection('user_plan_target_constraints')
         .where('AccountType_Variation','==','Latest allowable open')
         .get();
-      const closeSnap = await db
+      const closeVarSnap = await db
         .collection('user_plan_target_constraints')
         .where('AccountType_Variation','==','Latest allowable close')
         .get();
-      for (const snap of [openSnap, closeSnap]) {
+      for (const snap of [openVarSnap, closeVarSnap]) {
         snap.forEach(doc => {
           if (doc.data().Current_Value !== monthsUntilTarget) {
             batch.set(
@@ -308,7 +332,7 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         });
       }
 
-      // Yearly allowable
+      // write Yearly allowable
       const yearlySnap = await db
         .collection('user_plan_target_constraints')
         .where('AccountType_Variation','==','Yearly allowable')
@@ -323,7 +347,7 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         }
       });
 
-      // Monthly allowable
+      // write Monthly allowable
       const monthlySnap = await db
         .collection('user_plan_target_constraints')
         .where('AccountType_Variation','==','Monthly allowable')
@@ -333,6 +357,21 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
           batch.set(
             db.collection('user_plan_target_constraints').doc(doc.id),
             { Current_Value: monthlyAllowable },
+            { merge: true }
+          );
+        }
+      });
+
+      // write Min interval between opens
+      const minSnap = await db
+        .collection('user_plan_target_constraints')
+        .where('AccountType_Variation','==','Min interval between opens in LTM')
+        .get();
+      minSnap.forEach(doc => {
+        if (doc.data().Current_Value !== minInterval) {
+          batch.set(
+            db.collection('user_plan_target_constraints').doc(doc.id),
+            { Current_Value: minInterval },
             { merge: true }
           );
         }
@@ -348,7 +387,8 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         numberCards30,
         numberLoans30,
         monthlyAllowable,
-        monthsUntilTarget
+        monthsUntilTarget,
+        minInterval
       };
     } catch (err) {
       console.error('Error computing current values:', err);
