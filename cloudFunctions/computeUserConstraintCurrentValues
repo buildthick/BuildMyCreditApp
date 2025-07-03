@@ -1,5 +1,6 @@
 // This version correctly computes Current_Value where
-// AccountType_Variation = Current accounts / lates
+// AccountType_Variation = Current accounts / lates AND
+// AccountType_Variation = Revolving % of total
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
@@ -12,11 +13,10 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
     if (!uid) {
       throw new functions.https.HttpsError('unauthenticated', 'Must be signed in.');
     }
-
     const db = admin.firestore();
 
     try {
-      // 2) Count current accounts
+      // --- Compute Current Accounts / Lates ratio ---
       const currentSnap = await db
         .collection('user_stocks_conso')
         .where('stock', 'in', ['user_credit_cards', 'user_loans'])
@@ -24,62 +24,99 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         .get();
       const numberCurrentAccounts = currentSnap.size;
 
-      // 3) Count all late entries (including 3rd-party collections)
       const latesSnap = await db
         .collection('user_stocks_conso')
-        .where(
-          'stock',
-          'in',
-          [
-            'user_credit_cards_late_payments',
-            'user_loans_late_payments',
-            'user_collections_3rd_party'
-          ]
-        )
+        .where('stock', 'in', [
+          'user_credit_cards_late_payments',
+          'user_loans_late_payments',
+          'user_collections_3rd_party'
+        ])
         .get();
       const numberLates = latesSnap.size;
 
-      // 4) Calculate ratio and round to 4 decimal places
-      const rawRatio =
-        numberLates === 0
-          ? numberCurrentAccounts
-          : numberCurrentAccounts / numberLates;
-      const ratio = parseFloat(rawRatio.toFixed(4));  // e.g. 0.6667
+      const rawCAL = numberLates === 0
+        ? numberCurrentAccounts
+        : numberCurrentAccounts / numberLates;
+      const calRatio = parseFloat(rawCAL.toFixed(4));
 
-      // 5) Fetch relevant constraint docs
-      const constraintsSnap = await db
-        .collection('user_plan_target_constraints')
-        .where('AccountType_Variation', '==', 'Current accounts / lates')
+      // --- Compute Revolving % of total ---
+      // 2) totalRevolving: subStock == 'Revolving'
+      const revSnap = await db
+        .collection('user_stocks_conso')
+        .where('subStock', '==', 'Revolving')
         .get();
-
-      // 6) Batch-update only if value changed
-      const batch = db.batch();
-      let updates = 0;
-
-      constraintsSnap.forEach((doc) => {
-        const data = doc.data();
-        const oldValue = data.Current_Value;
-        if (oldValue !== ratio) {
-          const ref = db
-            .collection('user_plan_target_constraints')
-            .doc(doc.id);
-          batch.set(ref, { Current_Value: ratio }, { merge: true });
-          updates++;
+      let totalRevolving = 0;
+      revSnap.forEach(doc => {
+        const s = doc.data().stock;
+        if (s !== 'user_hard_pulls' && s !== 'user_credit_cards_late_payments') {
+          totalRevolving++;
         }
       });
 
-      // 7) Commit changes
-      if (updates > 0) {
-        await batch.commit();
-      }
+      // 3) totalInstallment: subStock == 'Installment'
+      const instSnap = await db
+        .collection('user_stocks_conso')
+        .where('subStock', '==', 'Installment')
+        .get();
+      let totalInstallment = 0;
+      instSnap.forEach(doc => {
+        const s = doc.data().stock;
+        if (s !== 'user_hard_pulls' && s !== 'user_loans_late_payments') {
+          totalInstallment++;
+        }
+      });
+
+      const totalAccounts = totalRevolving + totalInstallment;
+      const rawRevPct = totalAccounts === 0
+        ? 0
+        : totalRevolving / totalAccounts;
+      const revPct = parseFloat(rawRevPct.toFixed(4));
+
+      // --- Prepare batch updates ---
+      const batch = db.batch();
+
+      // Update Current Accounts / Lates constraint
+      const calConstraints = await db
+        .collection('user_plan_target_constraints')
+        .where('AccountType_Variation', '==', 'Current accounts / lates')
+        .get();
+      calConstraints.forEach(doc => {
+        if (doc.data().Current_Value !== calRatio) {
+          batch.set(
+            db.collection('user_plan_target_constraints').doc(doc.id),
+            { Current_Value: calRatio },
+            { merge: true }
+          );
+        }
+      });
+
+      // Update Revolving % of total constraint
+      const revConstraints = await db
+        .collection('user_plan_target_constraints')
+        .where('AccountType_Variation', '==', 'Revolving % of total')
+        .get();
+      revConstraints.forEach(doc => {
+        if (doc.data().Current_Value !== revPct) {
+          batch.set(
+            db.collection('user_plan_target_constraints').doc(doc.id),
+            { Current_Value: revPct },
+            { merge: true }
+          );
+        }
+      });
+
+      // 7) Commit if there are updates
+      await batch.commit();
 
       return {
         success: true,
         numberCurrentAccounts,
         numberLates,
-        ratio,
-        constraintsChecked: constraintsSnap.size,
-        updatesWritten: updates
+        calRatio,
+        totalRevolving,
+        totalInstallment,
+        totalAccounts,
+        revPct
       };
     } catch (err) {
       console.error('Error computing current values:', err);
@@ -90,4 +127,3 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
     }
   }
 );
-
