@@ -9,6 +9,7 @@
 // AccountType_Variation = Latest allowable open
 // AccountType_Variation = Latest allowable close
 // AccountType_Variation = Yearly allowable
+// AccountType_Variation = Monthly allowable
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
@@ -187,7 +188,6 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
       );
 
       // --- 8) Yearly allowable (cards + loans opened <12mo) ---
-      // helper: months between record and nowNorm
       function monthsBetween(recordDate) {
         const recParts = getNYCDateParts(recordDate);
         const recNorm  = new Date(recParts.y, recParts.m - 1, recParts.d);
@@ -212,32 +212,57 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         return months + dDiff / dim;
       }
 
-      const cardDocs = await db
+      const cardDocsLTM = await db
         .collection('user_stocks_conso')
         .where('stock','==','user_credit_cards')
         .get();
       let numberCardsLTM = 0;
-      cardDocs.forEach(doc => {
+      cardDocsLTM.forEach(doc => {
         const recDate = doc.data().DOFRecord.toDate();
         if (monthsBetween(recDate) < 12) numberCardsLTM++;
       });
 
-      const loanDocs = await db
+      const loanDocsLTM = await db
         .collection('user_stocks_conso')
         .where('stock','==','user_loans')
         .get();
       let numberLoansLTM = 0;
-      loanDocs.forEach(doc => {
+      loanDocsLTM.forEach(doc => {
         const recDate = doc.data().DOFRecord.toDate();
         if (monthsBetween(recDate) < 12) numberLoansLTM++;
       });
 
       const yearlyAllowable = numberCardsLTM + numberLoansLTM;
 
-      // --- batch writes ---
+      // --- 9) Monthly allowable (opened <30 days) ---
+      const nowMs = Date.now();
+      const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+      const cardDocs30 = await db
+        .collection('user_stocks_conso')
+        .where('stock','==','user_credit_cards')
+        .get();
+      let numberCards30 = 0;
+      cardDocs30.forEach(doc => {
+        const recMs = doc.data().DOFRecord.toDate().getTime();
+        if (nowMs - recMs < THIRTY_DAYS) numberCards30++;
+      });
+
+      const loanDocs30 = await db
+        .collection('user_stocks_conso')
+        .where('stock','==','user_loans')
+        .get();
+      let numberLoans30 = 0;
+      loanDocs30.forEach(doc => {
+        const recMs = doc.data().DOFRecord.toDate().getTime();
+        if (nowMs - recMs < THIRTY_DAYS) numberLoans30++;
+      });
+
+      const monthlyAllowable = numberCards30 + numberLoans30;
+
+      // --- Batch writes for all metrics ---
       const batch = db.batch();
 
-      // write metrics 1–6
+      // mapping 1–6
       const mapping = {
         'Current accounts / lates': calRatio,
         'Revolving % of total': revPct,
@@ -262,7 +287,7 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         });
       }
 
-      // write monthsUntilTarget to open & close
+      // open & close
       const openSnap = await db
         .collection('user_plan_target_constraints')
         .where('AccountType_Variation','==','Latest allowable open')
@@ -283,7 +308,7 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         });
       }
 
-      // write Yearly allowable
+      // Yearly allowable
       const yearlySnap = await db
         .collection('user_plan_target_constraints')
         .where('AccountType_Variation','==','Yearly allowable')
@@ -298,6 +323,21 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         }
       });
 
+      // Monthly allowable
+      const monthlySnap = await db
+        .collection('user_plan_target_constraints')
+        .where('AccountType_Variation','==','Monthly allowable')
+        .get();
+      monthlySnap.forEach(doc => {
+        if (doc.data().Current_Value !== monthlyAllowable) {
+          batch.set(
+            db.collection('user_plan_target_constraints').doc(doc.id),
+            { Current_Value: monthlyAllowable },
+            { merge: true }
+          );
+        }
+      });
+
       await batch.commit();
 
       return {
@@ -305,6 +345,9 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         numberCardsLTM,
         numberLoansLTM,
         yearlyAllowable,
+        numberCards30,
+        numberLoans30,
+        monthlyAllowable,
         monthsUntilTarget
       };
     } catch (err) {
