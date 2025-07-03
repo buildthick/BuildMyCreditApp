@@ -8,6 +8,7 @@
 // AccountType_Variation = Minimum 1 card
 // AccountType_Variation = Latest allowable open
 // AccountType_Variation = Latest allowable close
+// AccountType_Variation = Yearly allowable
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
@@ -22,7 +23,7 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
     }
     const db = admin.firestore();
 
-    // Helper: get Y/M/D in America/New_York for a Date
+    // Helper: extract NYC local year/month/day from a Date
     function getNYCDateParts(date) {
       const fmt = new Intl.DateTimeFormat('en-US', {
         timeZone: 'America/New_York',
@@ -32,11 +33,11 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
       });
       const parts = fmt.formatToParts(date);
       let y, m, d;
-      for (const p of parts) {
+      parts.forEach(p => {
         if (p.type === 'year')  y = +p.value;
         if (p.type === 'month') m = +p.value;
         if (p.type === 'day')   d = +p.value;
-      }
+      });
       return { y, m, d };
     }
 
@@ -59,9 +60,9 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         .get();
       const numberLates = latesSnap.size;
 
-      const rawCAL = numberLates===0
+      const rawCAL = numberLates === 0
         ? numberCurrentAccounts
-        : numberCurrentAccounts/numberLates;
+        : numberCurrentAccounts / numberLates;
       const calRatio = parseFloat(rawCAL.toFixed(4));
 
       // --- 2) Revolving % of total ---
@@ -69,10 +70,10 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         .collection('user_stocks_conso')
         .where('subStock','==','Revolving')
         .get();
-      let totalRevolving=0, revDocs=[];
-      revSnap.forEach(doc=>{
-        const s=doc.data().stock;
-        if(s!=='user_hard_pulls'&&s!=='user_credit_cards_late_payments'){
+      let totalRevolving = 0, revDocs = [];
+      revSnap.forEach(doc => {
+        const s = doc.data().stock;
+        if (s !== 'user_hard_pulls' && s !== 'user_credit_cards_late_payments') {
           totalRevolving++;
           revDocs.push(doc);
         }
@@ -82,26 +83,30 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         .collection('user_stocks_conso')
         .where('subStock','==','Installment')
         .get();
-      let totalInstallment=0;
-      instSnap.forEach(doc=>{
-        const s=doc.data().stock;
-        if(s!=='user_hard_pulls'&&s!=='user_loans_late_payments'){
+      let totalInstallment = 0;
+      instSnap.forEach(doc => {
+        const s = doc.data().stock;
+        if (s !== 'user_hard_pulls' && s !== 'user_loans_late_payments') {
           totalInstallment++;
         }
       });
 
-      const totalAccounts=totalRevolving+totalInstallment;
-      const rawRevPct= totalAccounts===0?0:totalRevolving/totalAccounts;
-      const revPct=parseFloat(rawRevPct.toFixed(4));
+      const totalAccounts = totalRevolving + totalInstallment;
+      const rawRevPct = totalAccounts === 0
+        ? 0
+        : totalRevolving / totalAccounts;
+      const revPct = parseFloat(rawRevPct.toFixed(4));
 
       // --- 3) Utilization (balance ÷ credit limit) ---
-      let totalCreditLimit=0,totalBalance=0;
-      revDocs.forEach(doc=>{
-        const d=doc.data();
-        totalCreditLimit += d.creditLimit||0;
-        totalBalance     += d.amountsOwed||0;
+      let totalCreditLimit = 0, totalBalance = 0;
+      revDocs.forEach(doc => {
+        const d = doc.data();
+        totalCreditLimit += (d.creditLimit || 0);
+        totalBalance     += (d.amountsOwed   || 0);
       });
-      const rawUtil = totalCreditLimit===0?0:totalBalance/totalCreditLimit;
+      const rawUtil = totalCreditLimit === 0
+        ? 0
+        : totalBalance / totalCreditLimit;
       const utilization = parseFloat(rawUtil.toFixed(4));
 
       // --- 4) Number of CFA or AF Cards with 0 Balance ---
@@ -118,17 +123,18 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         .get();
       const totalCFA = cfaSnap.size;
       const totalCFA_AF = totalAF + totalCFA;
+
       const zbSnap = await db
         .collection('user_stocks_conso')
         .where('stock','==','user_credit_cards')
         .where('amountsOwed','==',0)
         .get();
-      let numZeroBalanceCFAorAF=0;
-      zbSnap.forEach(doc=>{
-        const d=doc.data();
-        if(d.isAnnualFee||d.isCFA) numZeroBalanceCFAorAF++;
+      let numZeroBalanceCFAorAF = 0;
+      zbSnap.forEach(doc => {
+        const d = doc.data();
+        if (d.isAnnualFee || d.isCFA) numZeroBalanceCFAorAF++;
       });
-      const valueCFA_AF = totalCFA_AF===0? null : numZeroBalanceCFAorAF;
+      const valueCFA_AF = totalCFA_AF === 0 ? null : numZeroBalanceCFAorAF;
 
       // --- 5) Minimum 1 loan ---
       const loansSnap = await db
@@ -149,7 +155,6 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
       const nowParts = getNYCDateParts(now);
       const nowNorm  = new Date(nowParts.y, nowParts.m - 1, nowParts.d);
 
-      // fetch live target_date
       const userSnap = await db.collection('users').doc(uid).get();
       const targetMs = userSnap.data().target_date.toMillis();
       const targetRaw = new Date(targetMs);
@@ -158,10 +163,10 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
 
       let yearDiff   = tgtNorm.getFullYear()  - nowNorm.getFullYear();
       let monthDiff  = tgtNorm.getMonth()     - nowNorm.getMonth();
-      let totalMonths= yearDiff*12 + monthDiff;
+      let totalMonths= yearDiff * 12 + monthDiff;
 
       let dayDiff = tgtNorm.getDate() - nowNorm.getDate();
-      if(dayDiff<0){
+      if (dayDiff < 0) {
         totalMonths--;
         const daysInPrev = new Date(
           tgtNorm.getFullYear(),
@@ -173,15 +178,63 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
 
       const daysInMonth = new Date(
         tgtNorm.getFullYear(),
-        tgtNorm.getMonth()+1,
+        tgtNorm.getMonth() + 1,
         0
       ).getDate();
 
       const monthsUntilTarget = parseFloat(
-        (totalMonths + dayDiff/daysInMonth).toFixed(2)
+        (totalMonths + dayDiff / daysInMonth).toFixed(2)
       );
 
-      // --- prepare batch ---
+      // --- 8) Yearly allowable (cards + loans opened <12mo) ---
+      // helper: months between record and nowNorm
+      function monthsBetween(recordDate) {
+        const recParts = getNYCDateParts(recordDate);
+        const recNorm  = new Date(recParts.y, recParts.m - 1, recParts.d);
+        let yDiff = nowNorm.getFullYear() - recNorm.getFullYear();
+        let mDiff = nowNorm.getMonth()    - recNorm.getMonth();
+        let months = yDiff * 12 + mDiff;
+        let dDiff = nowNorm.getDate() - recNorm.getDate();
+        if (dDiff < 0) {
+          months--;
+          const daysInPrev = new Date(
+            recNorm.getFullYear(),
+            recNorm.getMonth(),
+            0
+          ).getDate();
+          dDiff += daysInPrev;
+        }
+        const dim = new Date(
+          recNorm.getFullYear(),
+          recNorm.getMonth() + 1,
+          0
+        ).getDate();
+        return months + dDiff / dim;
+      }
+
+      const cardDocs = await db
+        .collection('user_stocks_conso')
+        .where('stock','==','user_credit_cards')
+        .get();
+      let numberCardsLTM = 0;
+      cardDocs.forEach(doc => {
+        const recDate = doc.data().DOFRecord.toDate();
+        if (monthsBetween(recDate) < 12) numberCardsLTM++;
+      });
+
+      const loanDocs = await db
+        .collection('user_stocks_conso')
+        .where('stock','==','user_loans')
+        .get();
+      let numberLoansLTM = 0;
+      loanDocs.forEach(doc => {
+        const recDate = doc.data().DOFRecord.toDate();
+        if (monthsBetween(recDate) < 12) numberLoansLTM++;
+      });
+
+      const yearlyAllowable = numberCardsLTM + numberLoansLTM;
+
+      // --- batch writes ---
       const batch = db.batch();
 
       // write metrics 1–6
@@ -193,23 +246,23 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         'Minimum 1 loan': numLoans,
         'Minimum 1 card': numCards
       };
-      for(const [variation,value] of Object.entries(mapping)){
+      for (const [variation, value] of Object.entries(mapping)) {
         const snap = await db
           .collection('user_plan_target_constraints')
           .where('AccountType_Variation','==',variation)
           .get();
-        snap.forEach(doc=>{
-          if(doc.data().Current_Value!==value){
+        snap.forEach(doc => {
+          if (doc.data().Current_Value !== value) {
             batch.set(
               db.collection('user_plan_target_constraints').doc(doc.id),
               { Current_Value: value },
-              { merge:true }
+              { merge: true }
             );
           }
         });
       }
 
-      // write monthsUntilTarget to both open & close
+      // write monthsUntilTarget to open & close
       const openSnap = await db
         .collection('user_plan_target_constraints')
         .where('AccountType_Variation','==','Latest allowable open')
@@ -218,26 +271,45 @@ exports.computeUserConstraintCurrentValues = functions.region('us-central1').htt
         .collection('user_plan_target_constraints')
         .where('AccountType_Variation','==','Latest allowable close')
         .get();
-
-      for(const snap of [openSnap, closeSnap]){
-        snap.forEach(doc=>{
-          if(doc.data().Current_Value!==monthsUntilTarget){
+      for (const snap of [openSnap, closeSnap]) {
+        snap.forEach(doc => {
+          if (doc.data().Current_Value !== monthsUntilTarget) {
             batch.set(
               db.collection('user_plan_target_constraints').doc(doc.id),
               { Current_Value: monthsUntilTarget },
-              { merge:true }
+              { merge: true }
             );
           }
         });
       }
 
-      // commit all updates
+      // write Yearly allowable
+      const yearlySnap = await db
+        .collection('user_plan_target_constraints')
+        .where('AccountType_Variation','==','Yearly allowable')
+        .get();
+      yearlySnap.forEach(doc => {
+        if (doc.data().Current_Value !== yearlyAllowable) {
+          batch.set(
+            db.collection('user_plan_target_constraints').doc(doc.id),
+            { Current_Value: yearlyAllowable },
+            { merge: true }
+          );
+        }
+      });
+
       await batch.commit();
 
-      return { success: true, monthsUntilTarget };
-    } catch(err) {
-      console.error('Error computing current values:',err);
-      throw new functions.https.HttpsError('internal', err.message||'Unknown error');
+      return {
+        success: true,
+        numberCardsLTM,
+        numberLoansLTM,
+        yearlyAllowable,
+        monthsUntilTarget
+      };
+    } catch (err) {
+      console.error('Error computing current values:', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Unknown error');
     }
   }
 );
