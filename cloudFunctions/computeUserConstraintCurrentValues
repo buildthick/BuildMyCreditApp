@@ -1,1 +1,93 @@
+// This version correctly computes Current_Value where
+// AccountType_Variation = Current accounts / lates
+
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+exports.computeUserConstraintCurrentValues = functions.region('us-central1').https.onCall(
+  async (data, context) => {
+    // 1) Auth check
+    const uid = context.auth && context.auth.uid;
+    if (!uid) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be signed in.');
+    }
+
+    const db = admin.firestore();
+
+    try {
+      // 2) Count current accounts
+      const currentSnap = await db
+        .collection('user_stocks_conso')
+        .where('stock', 'in', ['user_credit_cards', 'user_loans'])
+        .where('isCurrent', '==', true)
+        .get();
+      const numberCurrentAccounts = currentSnap.size;
+
+      // 3) Count all late entries (including 3rd-party collections)
+      const latesSnap = await db
+        .collection('user_stocks_conso')
+        .where(
+          'stock',
+          'in',
+          [
+            'user_credit_cards_late_payments',
+            'user_loans_late_payments',
+            'user_collections_3rd_party'
+          ]
+        )
+        .get();
+      const numberLates = latesSnap.size;
+
+      // 4) Calculate ratio and round to 4 decimal places
+      const rawRatio =
+        numberLates === 0
+          ? numberCurrentAccounts
+          : numberCurrentAccounts / numberLates;
+      const ratio = parseFloat(rawRatio.toFixed(4));  // e.g. 0.6667
+
+      // 5) Fetch relevant constraint docs
+      const constraintsSnap = await db
+        .collection('user_plan_target_constraints')
+        .where('AccountType_Variation', '==', 'Current accounts / lates')
+        .get();
+
+      // 6) Batch-update only if value changed
+      const batch = db.batch();
+      let updates = 0;
+
+      constraintsSnap.forEach((doc) => {
+        const data = doc.data();
+        const oldValue = data.Current_Value;
+        if (oldValue !== ratio) {
+          const ref = db
+            .collection('user_plan_target_constraints')
+            .doc(doc.id);
+          batch.set(ref, { Current_Value: ratio }, { merge: true });
+          updates++;
+        }
+      });
+
+      // 7) Commit changes
+      if (updates > 0) {
+        await batch.commit();
+      }
+
+      return {
+        success: true,
+        numberCurrentAccounts,
+        numberLates,
+        ratio,
+        constraintsChecked: constraintsSnap.size,
+        updatesWritten: updates
+      };
+    } catch (err) {
+      console.error('Error computing current values:', err);
+      throw new functions.https.HttpsError(
+        'internal',
+        err.message || 'Unknown error'
+      );
+    }
+  }
+);
 
