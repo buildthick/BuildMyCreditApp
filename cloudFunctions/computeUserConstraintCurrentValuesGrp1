@@ -16,7 +16,7 @@ const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 // To avoid deployment errors, do not call admin.initializeApp() in your code
 
-exports.computeUserConstraintCurrentValues = functions.region('us-central1').https.onCall(
+exports.computeUserConstraintCurrentValuesGrp1 = functions.region('us-central1').https.onCall(
   async (data, context) => {
     // 1) Auth check
     const uid = context.auth && context.auth.uid;
