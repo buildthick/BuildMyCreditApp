@@ -1,6 +1,7 @@
 // This version correctly writes the Current_Value field for:
 // AccountType_Variation = Requests allowable
 // AccountType_Variation = Min interval between requests in LTM
+// AccountType_Variation = Maximum accounts with balance (AZEO)
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
@@ -96,21 +97,11 @@ exports.computeUserConstraintCurrentValuesGrp2and3 = functions
       });
 
       // --- 2) Min interval between requests in LTM (hard pulls) ---
-      // build a 12-month cutoff
       const cutoff = new Date(nowNorm);
       cutoff.setMonth(cutoff.getMonth() - 12);
-      const cutoffNorm = new Date(
-        cutoff.getFullYear(),
-        cutoff.getMonth(),
-        cutoff.getDate()
-      );
+      const cutoffNorm = new Date(cutoff.getFullYear(), cutoff.getMonth(), cutoff.getDate());
 
-      // fetch all hard-pull DOFRecords
-      const pullsAllSnap = await db
-        .collection('user_stocks_conso')
-        .where('stock', '==', 'user_hard_pulls')
-        .get();
-
+      const pullsAllSnap = pullsSnap; // reuse above
       const dates = pullsAllSnap.docs
         .map(doc => {
           const d = doc.data().DOFRecord.toDate();
@@ -143,16 +134,48 @@ exports.computeUserConstraintCurrentValuesGrp2and3 = functions
         }
       });
 
+      // --- 3) Maximum accounts with balance (AZEO) ---
+      // fetch all Revolving subStock docs
+      const revSnap = await db
+        .collection('user_stocks_conso')
+        .where('subStock', '==', 'Revolving')
+        .get();
+
+      // now filter out any stock == pulls or late-pay refs
+      const maxAccountsWithBalance = revSnap.docs
+        .filter(doc => {
+          const d = doc.data();
+          return d.stock !== 'user_hard_pulls'
+              && d.stock !== 'user_credit_cards_late_payments'
+              && (d.amountsOwed || 0) > 0;
+        })
+        .length;
+
+      const azeoVarSnap = await db
+        .collection('user_plan_target_constraints')
+        .where('AccountType_Variation', '==', 'Maximum accounts with balance (AZEO)')
+        .get();
+      azeoVarSnap.forEach(doc => {
+        if (doc.data().Current_Value !== maxAccountsWithBalance) {
+          batch.set(
+            db.collection('user_plan_target_constraints').doc(doc.id),
+            { Current_Value: maxAccountsWithBalance },
+            { merge: true }
+          );
+        }
+      });
+
       // commit writes
       await batch.commit();
 
       return {
         success: true,
         requestsAllowableCount,
-        minIntervalRequests
+        minIntervalRequests,
+        maxAccountsWithBalance
       };
     } catch (err) {
-      console.error('Error computing Requests and Min-interval:', err);
+      console.error('Error computing Requests/AZEO metrics:', err);
       throw new functions.https.HttpsError('internal', err.message || 'Unknown error');
     }
   });
