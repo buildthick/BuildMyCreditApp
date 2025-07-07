@@ -1,14 +1,105 @@
+// This version correctly writes the Current_Value field for:
+// AccountType_Variation = Requests allowable
+// AccountType_Variation = 
+
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 // To avoid deployment errors, do not call admin.initializeApp() in your code
 
-exports.computeUserConstraintCurrentValuesGrp2and3 = functions.region('us-central1').https.onCall(
-  (data, context) => {
-		if (!context.auth.uid) {
-      return;
+exports.computeUserConstraintCurrentValuesGrp2and3 = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    // 1) Auth check
+    const uid = context.auth && context.auth.uid;
+    if (!uid) {
+      throw new functions.https.HttpsError('unauthenticated','Must be signed in.');
     }
-    // Write your code below!
+    const db = admin.firestore();
 
-    // Write your code above!
-  }
-);
+    // Helper: extract NYC Y/M/D from a Date
+    function getNYCDateParts(date) {
+      const fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+      });
+      const parts = fmt.formatToParts(date);
+      let y, m, d;
+      parts.forEach(p => {
+        if (p.type === 'year')  y = +p.value;
+        if (p.type === 'month') m = +p.value;
+        if (p.type === 'day')   d = +p.value;
+      });
+      return { y, m, d };
+    }
+
+    // Compute months between record and now (NYC-normalized)
+    function monthsBetween(recordDate, nowNorm) {
+      const recParts = getNYCDateParts(recordDate);
+      const recNorm  = new Date(recParts.y, recParts.m - 1, recParts.d);
+      let yDiff = nowNorm.getFullYear() - recNorm.getFullYear();
+      let mDiff = nowNorm.getMonth()    - recNorm.getMonth();
+      let months = yDiff * 12 + mDiff;
+      let dDiff = nowNorm.getDate() - recNorm.getDate();
+      if (dDiff < 0) {
+        months--;
+        const daysInPrev = new Date(
+          recNorm.getFullYear(),
+          recNorm.getMonth(),
+          0
+        ).getDate();
+        dDiff += daysInPrev;
+      }
+      const daysInMonth = new Date(
+        recNorm.getFullYear(),
+        recNorm.getMonth() + 1,
+        0
+      ).getDate();
+      return months + dDiff / daysInMonth;
+    }
+
+    try {
+      // normalize "today" to NYC local date
+      const now = new Date();
+      const nowParts = getNYCDateParts(now);
+      const nowNorm  = new Date(nowParts.y, nowParts.m - 1, nowParts.d);
+
+      // --- Requests allowable (hard pulls in last 12 months) ---
+      const pullsSnap = await db
+        .collection('user_stocks_conso')
+        .where('stock','==','user_hard_pulls')
+        .get();
+
+      let requestsAllowableCount = 0;
+      pullsSnap.forEach(doc => {
+        const recDate = doc.data().DOFRecord.toDate();
+        const ageMonths = monthsBetween(recDate, nowNorm);
+        if (ageMonths < 12) {
+          requestsAllowableCount++;
+        }
+      });
+
+      // Write to user_plan_target_constraints
+      const batch = db.batch();
+      const reqSnap = await db
+        .collection('user_plan_target_constraints')
+        .where('AccountType_Variation','==','Requests allowable')
+        .get();
+      reqSnap.forEach(doc => {
+        if (doc.data().Current_Value !== requestsAllowableCount) {
+          batch.set(
+            db.collection('user_plan_target_constraints').doc(doc.id),
+            { Current_Value: requestsAllowableCount },
+            { merge: true }
+          );
+        }
+      });
+
+      await batch.commit();
+      return { success: true, requestsAllowableCount };
+    } catch (err) {
+      console.error('Error computing Requests allowable:', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Unknown error');
+    }
+  });
