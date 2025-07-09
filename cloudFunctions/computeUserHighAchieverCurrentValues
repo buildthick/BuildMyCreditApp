@@ -11,6 +11,7 @@
 // Unique_Name = Balance on Credit Cards
 // Unique_Name = Amounts owed on lates
 // Unique_Name = Amounts owed on charge offs
+// Unique_Name = Amounts owed on account collections
 // Unique_Name = Amounts owed on 3rd party collections
 
 const functions = require('firebase-functions');
@@ -21,18 +22,17 @@ exports.computeUserHighAchieverCurrentValues = functions
   .region('us-central1')
   .https.onCall(async (data, context) => {
     if (!context.auth || !context.auth.uid) {
-      throw new functions.https.HttpsError('unauthenticated','Must be signed in.');
+      throw new functions.https.HttpsError('unauthenticated', 'Must be signed in.');
     }
+
     const uid = context.auth.uid;
     const db = admin.firestore();
     const userRef = db.doc(`users/${uid}`);
 
     // 1) Load all user_high_achiever_targets docs
-    const targetsSnap = await db
-      .collection('user_high_achiever_targets')
-      .get();
+    const targetsSnap = await db.collection('user_high_achiever_targets').get();
     if (targetsSnap.empty) {
-      throw new functions.https.HttpsError('not-found','No docs found in user_high_achiever_targets');
+      throw new functions.https.HttpsError('not-found', 'No docs found in user_high_achiever_targets');
     }
 
     // 2) Prepare batch for updates
@@ -45,10 +45,10 @@ exports.computeUserHighAchieverCurrentValues = functions
 
     // 3) Loop through each doc and compute Current_Value
     for (const doc of targetsSnap.docs) {
-      const data       = doc.data();
-      const docRef     = db.collection('user_high_achiever_targets').doc(doc.id);
-      const oldValue   = data.Current_Value;
-      let   currentValue = oldValue;
+      const data = doc.data();
+      const docRef = db.collection('user_high_achiever_targets').doc(doc.id);
+      const oldValue = data.Current_Value;
+      let currentValue = oldValue;
 
       switch (data.Unique_Name) {
         case 'Number of Loans': {
@@ -120,15 +120,15 @@ exports.computeUserHighAchieverCurrentValues = functions
         }
 
         case 'Number of Requests in LTM': {
-          const allPulls = await db
+          const pullsSnap = await db
             .collection('user_stocks_conso')
             .where('stock', '==', 'user_hard_pulls')
             .where('userRef', '==', userRef)
             .get();
-          const recentPulls = allPulls.docs.filter(d => 
+          const recent = pullsSnap.docs.filter(d =>
             d.data().DOFRecord.toMillis() >= cutoffMs
           );
-          currentValue = recentPulls.length;
+          currentValue = recent.length;
           break;
         }
 
@@ -181,7 +181,6 @@ exports.computeUserHighAchieverCurrentValues = functions
             ])
             .where('userRef', '==', userRef)
             .get();
-
           currentValue = latesSnap.docs.reduce((sum, d) => sum + (d.data().amountsOwed || 0), 0);
           break;
         }
@@ -195,15 +194,10 @@ exports.computeUserHighAchieverCurrentValues = functions
             ])
             .where('userRef', '==', userRef)
             .get();
-
           let sumChargedOff = 0;
           for (const lateDoc of latesSnap.docs) {
             const stockColl = lateDoc.data().stock;
-            const srcSnap = await db
-              .collection(stockColl)
-              .doc(lateDoc.id)
-              .get();
-            const src = srcSnap.data() || {};
+            const src = (await db.collection(stockColl).doc(lateDoc.id).get()).data() || {};
             if (src.chargedOff && !src.sentToCollections) {
               sumChargedOff += lateDoc.data().amountsOwed || 0;
             }
@@ -221,34 +215,39 @@ exports.computeUserHighAchieverCurrentValues = functions
             ])
             .where('userRef', '==', userRef)
             .get();
-
-          let amountsOwedCollections = 0;
+          let sumCollected = 0;
           for (const lateDoc of latesSnap.docs) {
             const stockColl = lateDoc.data().stock;
-            const srcSnap = await db
-              .collection(stockColl)
-              .doc(lateDoc.id)
-              .get();
-            const src = srcSnap.data() || {};
+            const src = (await db.collection(stockColl).doc(lateDoc.id).get()).data() || {};
             if (src.sentToCollections) {
-              amountsOwedCollections += lateDoc.data().amountsOwed || 0;
+              sumCollected += lateDoc.data().amountsOwed || 0;
             }
           }
-          currentValue = amountsOwedCollections;
+          currentValue = sumCollected;
+          break;
+        }
+
+        case 'Amounts owed on 3rd party collections': {
+          const collSnap = await db
+            .collection('user_stocks_conso')
+            .where('stock', '==', 'user_collections_3rd_party')
+            .where('userRef', '==', userRef)
+            .get();
+          currentValue = collSnap.docs.reduce((sum, d) => sum + (d.data().amountsOwed || 0), 0);
           break;
         }
 
         default:
-          continue;
+          continue; // skip any unmatched Unique_Name
       }
 
-      // 4) Only update if changed
+      // 4) Only queue update if the value changed
       if (currentValue !== oldValue) {
         batch.set(docRef, { Current_Value: currentValue }, { merge: true });
       }
     }
 
-    // 5) Commit all updates
+    // 5) Commit all batched updates
     await batch.commit();
     return { success: true, updated: targetsSnap.size };
   });
