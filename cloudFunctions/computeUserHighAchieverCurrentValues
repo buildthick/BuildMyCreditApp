@@ -7,6 +7,8 @@
 // Unique_Name = Number of Requests in LTM
 // Unique_Name = Credit Limit on Loans
 // Unique_Name = Credit Limit on Credit Cards
+// Unique_Name = Balance on Loans
+// Unique_Name = Balance on Credit Cards
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
@@ -46,10 +48,10 @@ exports.computeUserHighAchieverCurrentValues = functions
 
     // 3) Loop through each doc and compute Current_Value
     for (const doc of targetsSnap.docs) {
-      const data = doc.data();
-      const docRef = db.collection('user_high_achiever_targets').doc(doc.id);
+      const data     = doc.data();
+      const docRef   = db.collection('user_high_achiever_targets').doc(doc.id);
       const oldValue = data.Current_Value;
-      let currentValue = oldValue;
+      let   currentValue = oldValue;
 
       switch (data.Unique_Name) {
         case 'Number of Loans': {
@@ -162,6 +164,36 @@ exports.computeUserHighAchieverCurrentValues = functions
             sumCreditLimitCC += (typeof val === 'number' ? val : 0);
           });
           currentValue = sumCreditLimitCC;
+          break;
+        }
+
+        case 'Balance on Loans': {
+          const loansSnap = await db
+            .collection('user_stocks_conso')
+            .where('stock', '==', 'user_loans')
+            .where('userRef', '==', userDocRef)
+            .get();
+          let sumAmountsOwed = 0;
+          loansSnap.docs.forEach(d => {
+            const val = d.data().amountsOwed;
+            sumAmountsOwed += (typeof val === 'number' ? val : 0);
+          });
+          currentValue = sumAmountsOwed;
+          break;
+        }
+
+        case 'Balance on Credit Cards': {
+          const cardsSnap = await db
+            .collection('user_stocks_conso')
+            .where('stock', '==', 'user_credit_cards')
+            .where('userRef', '==', userDocRef)
+            .get();
+          let sumAmountsOwedCC = 0;
+          cardsSnap.docs.forEach(d => {
+            const val = d.data().amountsOwed;
+            sumAmountsOwedCC += (typeof val === 'number' ? val : 0);
+          });
+          currentValue = sumAmountsOwedCC;
           break;
         }
 
