@@ -9,6 +9,7 @@
 // Unique_Name = Credit Limit on Credit Cards
 // Unique_Name = Balance on Loans
 // Unique_Name = Balance on Credit Cards
+// Unique_Name = Amounts owed on lates
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
@@ -25,7 +26,6 @@ exports.computeUserHighAchieverCurrentValues = functions
     }
     const uid = context.auth.uid;
     const db = admin.firestore();
-    const userDocRef = db.doc(`users/${uid}`);
 
     // 1) Load all user_high_achiever_targets docs
     const targetsSnap = await db
@@ -48,9 +48,9 @@ exports.computeUserHighAchieverCurrentValues = functions
 
     // 3) Loop through each doc and compute Current_Value
     for (const doc of targetsSnap.docs) {
-      const data     = doc.data();
-      const docRef   = db.collection('user_high_achiever_targets').doc(doc.id);
-      const oldValue = data.Current_Value;
+      const data       = doc.data();
+      const docRef     = db.collection('user_high_achiever_targets').doc(doc.id);
+      const oldValue   = data.Current_Value;
       let   currentValue = oldValue;
 
       switch (data.Unique_Name) {
@@ -58,7 +58,7 @@ exports.computeUserHighAchieverCurrentValues = functions
           const loansSnap = await db
             .collection('user_stocks_conso')
             .where('stock', '==', 'user_loans')
-            .where('userRef', '==', userDocRef)
+            .where('userRef', '==', db.doc(`users/${uid}`))
             .get();
           currentValue = loansSnap.size;
           break;
@@ -68,7 +68,7 @@ exports.computeUserHighAchieverCurrentValues = functions
           const cardsSnap = await db
             .collection('user_stocks_conso')
             .where('stock', '==', 'user_credit_cards')
-            .where('userRef', '==', userDocRef)
+            .where('userRef', '==', db.doc(`users/${uid}`))
             .get();
           currentValue = cardsSnap.size;
           break;
@@ -78,7 +78,7 @@ exports.computeUserHighAchieverCurrentValues = functions
           const afSnap = await db
             .collection('user_stocks_conso')
             .where('stock', '==', 'user_credit_cards')
-            .where('userRef', '==', userDocRef)
+            .where('userRef', '==', db.doc(`users/${uid}`))
             .where('isAnnualFee', '==', true)
             .get();
           currentValue = afSnap.size;
@@ -89,7 +89,7 @@ exports.computeUserHighAchieverCurrentValues = functions
           const cfaSnap = await db
             .collection('user_stocks_conso')
             .where('stock', '==', 'user_credit_cards')
-            .where('userRef', '==', userDocRef)
+            .where('userRef', '==', db.doc(`users/${uid}`))
             .where('isCFA', '==', true)
             .get();
           currentValue = cfaSnap.size;
@@ -100,7 +100,7 @@ exports.computeUserHighAchieverCurrentValues = functions
           const revSnap = await db
             .collection('user_stocks_conso')
             .where('subStock', '==', 'Revolving')
-            .where('userRef', '==', userDocRef)
+            .where('userRef', '==', db.doc(`users/${uid}`))
             .get();
           const totalRevolving = revSnap.docs.filter(d => {
             const s = d.data().stock;
@@ -110,7 +110,7 @@ exports.computeUserHighAchieverCurrentValues = functions
           const instSnap = await db
             .collection('user_stocks_conso')
             .where('subStock', '==', 'Installment')
-            .where('userRef', '==', userDocRef)
+            .where('userRef', '==', db.doc(`users/${uid}`))
             .get();
           const totalInstallment = instSnap.docs.filter(d => {
             const s = d.data().stock;
@@ -128,11 +128,11 @@ exports.computeUserHighAchieverCurrentValues = functions
           const allPullsSnap = await db
             .collection('user_stocks_conso')
             .where('stock', '==', 'user_hard_pulls')
-            .where('userRef', '==', userDocRef)
+            .where('userRef', '==', db.doc(`users/${uid}`))
             .get();
-          const recentPulls = allPullsSnap.docs.filter(d => {
-            return d.data().DOFRecord.toMillis() >= cutoffMs;
-          });
+          const recentPulls = allPullsSnap.docs.filter(d => 
+            d.data().DOFRecord.toMillis() >= cutoffMs
+          );
           currentValue = recentPulls.length;
           break;
         }
@@ -141,7 +141,7 @@ exports.computeUserHighAchieverCurrentValues = functions
           const loansSnap = await db
             .collection('user_stocks_conso')
             .where('stock', '==', 'user_loans')
-            .where('userRef', '==', userDocRef)
+            .where('userRef', '==', db.doc(`users/${uid}`))
             .get();
           let sumCreditLimit = 0;
           loansSnap.docs.forEach(d => {
@@ -156,7 +156,7 @@ exports.computeUserHighAchieverCurrentValues = functions
           const cardsSnap = await db
             .collection('user_stocks_conso')
             .where('stock', '==', 'user_credit_cards')
-            .where('userRef', '==', userDocRef)
+            .where('userRef', '==', db.doc(`users/${uid}`))
             .get();
           let sumCreditLimitCC = 0;
           cardsSnap.docs.forEach(d => {
@@ -171,7 +171,7 @@ exports.computeUserHighAchieverCurrentValues = functions
           const loansSnap = await db
             .collection('user_stocks_conso')
             .where('stock', '==', 'user_loans')
-            .where('userRef', '==', userDocRef)
+            .where('userRef', '==', db.doc(`users/${uid}`))
             .get();
           let sumAmountsOwed = 0;
           loansSnap.docs.forEach(d => {
@@ -186,7 +186,7 @@ exports.computeUserHighAchieverCurrentValues = functions
           const cardsSnap = await db
             .collection('user_stocks_conso')
             .where('stock', '==', 'user_credit_cards')
-            .where('userRef', '==', userDocRef)
+            .where('userRef', '==', db.doc(`users/${uid}`))
             .get();
           let sumAmountsOwedCC = 0;
           cardsSnap.docs.forEach(d => {
@@ -197,8 +197,37 @@ exports.computeUserHighAchieverCurrentValues = functions
           break;
         }
 
+        case 'Amounts owed on lates': {
+          // fetch all late-payment entries
+          const latesSnap = await db
+            .collection('user_stocks_conso')
+            .where('stock', 'in', [
+              'user_credit_cards_late_payments',
+              'user_loans_late_payments'
+            ])
+            .where('userRef', '==', db.doc(`users/${uid}`))
+            .get();
+
+          let amountsOwedLates = 0;
+          for (const lateDoc of latesSnap.docs) {
+            const stockColl = lateDoc.data().stock;
+            // load source from root-level collection
+            const sourceSnap = await db
+              .collection(stockColl)
+              .doc(lateDoc.id)
+              .get();
+            if (!sourceSnap.exists) continue;
+            const src = sourceSnap.data();
+            if (!src.chargedOff && !src.sentToCollections) {
+              amountsOwedLates += Number(lateDoc.data().amountsOwed) || 0;
+            }
+          }
+          currentValue = amountsOwedLates;
+          break;
+        }
+
         default:
-          continue; // skip any unhandled Unique_Name
+          continue; // skip unhandled Unique_Name
       }
 
       // 4) Only queue update if the value changed
@@ -209,6 +238,5 @@ exports.computeUserHighAchieverCurrentValues = functions
 
     // 5) Commit all batched updates
     await batch.commit();
-
     return { success: true, updated: targetsSnap.size };
   });
