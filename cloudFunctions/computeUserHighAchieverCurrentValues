@@ -1,0 +1,152 @@
+// This function correctly calculates
+// Unique_Name = Number of Loans
+// Unique_Name = Number of Credit Cards
+// Unique_Name = Number of Annual Fee Cards
+// Unique_Name = Number of CFA Cards
+// Unique_Name = Revolving % of Total Accounts
+// Unique_Name = Number of Requests in LTM
+
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+exports.computeUserHighAchieverCurrentValues = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    if (!context.auth || !context.auth.uid) {
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'Must be signed in.'
+      );
+    }
+    const uid = context.auth.uid;
+    const db = admin.firestore();
+    const userDocRef = db.doc(`users/${uid}`);
+
+    // 1) Load all user_high_achiever_targets docs
+    const targetsSnap = await db
+      .collection('user_high_achiever_targets')
+      .get();
+    if (targetsSnap.empty) {
+      throw new functions.https.HttpsError(
+        'not-found',
+        'No docs found in user_high_achiever_targets'
+      );
+    }
+
+    // 2) Prepare batch for updates
+    const batch = db.batch();
+
+    // Precompute cutoff for LTM (12 months ago)
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
+    const cutoffMs = twelveMonthsAgo.getTime();
+
+    // 3) Loop through each doc and compute Current_Value
+    for (const doc of targetsSnap.docs) {
+      const data = doc.data();
+      const docRef = db.collection('user_high_achiever_targets').doc(doc.id);
+      const oldValue = data.Current_Value;
+      let currentValue = oldValue;
+
+      switch (data.Unique_Name) {
+        case 'Number of Loans': {
+          const loansSnap = await db
+            .collection('user_stocks_conso')
+            .where('stock', '==', 'user_loans')
+            .where('userRef', '==', userDocRef)
+            .get();
+          currentValue = loansSnap.size;
+          break;
+        }
+
+        case 'Number of Credit Cards': {
+          const cardsSnap = await db
+            .collection('user_stocks_conso')
+            .where('stock', '==', 'user_credit_cards')
+            .where('userRef', '==', userDocRef)
+            .get();
+          currentValue = cardsSnap.size;
+          break;
+        }
+
+        case 'Number of Annual Fee Cards': {
+          const afSnap = await db
+            .collection('user_stocks_conso')
+            .where('stock', '==', 'user_credit_cards')
+            .where('userRef', '==', userDocRef)
+            .where('isAnnualFee', '==', true)
+            .get();
+          currentValue = afSnap.size;
+          break;
+        }
+
+        case 'Number of CFA Cards': {
+          const cfaSnap = await db
+            .collection('user_stocks_conso')
+            .where('stock', '==', 'user_credit_cards')
+            .where('userRef', '==', userDocRef)
+            .where('isCFA', '==', true)
+            .get();
+          currentValue = cfaSnap.size;
+          break;
+        }
+
+        case 'Revolving % of Total Accounts': {
+          const revSnap = await db
+            .collection('user_stocks_conso')
+            .where('subStock', '==', 'Revolving')
+            .where('userRef', '==', userDocRef)
+            .get();
+          const totalRevolving = revSnap.docs.filter(d => {
+            const s = d.data().stock;
+            return s !== 'user_hard_pulls' && s !== 'user_credit_cards_late_payments';
+          }).length;
+
+          const instSnap = await db
+            .collection('user_stocks_conso')
+            .where('subStock', '==', 'Installment')
+            .where('userRef', '==', userDocRef)
+            .get();
+          const totalInstallment = instSnap.docs.filter(d => {
+            const s = d.data().stock;
+            return s !== 'user_hard_pulls' && s !== 'user_loans_late_payments';
+          }).length;
+
+          const totalAccounts = totalRevolving + totalInstallment;
+          currentValue = totalAccounts > 0 ? totalRevolving / totalAccounts : 0;
+          break;
+        }
+
+        case 'Number of Requests in LTM': {
+          // 1) fetch all hard-pulls for user
+          const allPullsSnap = await db
+            .collection('user_stocks_conso')
+            .where('stock', '==', 'user_hard_pulls')
+            .where('userRef', '==', userDocRef)
+            .get();
+          // 2) filter in memory for those in last 12 months
+          const recent = allPullsSnap.docs.filter(d => {
+            const rec = d.data().DOFRecord;
+            // DOFRecord is a Firestore Timestamp
+            return rec.toMillis() >= cutoffMs;
+          });
+          currentValue = recent.length;
+          break;
+        }
+
+        default:
+          continue;  // skip any unhandled Unique_Name
+      }
+
+      // 4) Only queue update if the value changed
+      if (currentValue !== oldValue) {
+        batch.set(docRef, { Current_Value: currentValue }, { merge: true });
+      }
+    }
+
+    // 5) Commit all batched updates
+    await batch.commit();
+
+    return { success: true, updated: targetsSnap.size };
+  });
