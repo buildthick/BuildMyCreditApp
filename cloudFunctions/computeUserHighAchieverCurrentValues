@@ -5,6 +5,8 @@
 // Unique_Name = Number of CFA Cards
 // Unique_Name = Revolving % of Total Accounts
 // Unique_Name = Number of Requests in LTM
+// Unique_Name = Credit Limit on Loans
+// Unique_Name = Credit Limit on Credit Cards
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
@@ -114,29 +116,57 @@ exports.computeUserHighAchieverCurrentValues = functions
           }).length;
 
           const totalAccounts = totalRevolving + totalInstallment;
-          currentValue = totalAccounts > 0 ? totalRevolving / totalAccounts : 0;
+          currentValue = totalAccounts > 0 
+            ? totalRevolving / totalAccounts 
+            : 0;
           break;
         }
 
         case 'Number of Requests in LTM': {
-          // 1) fetch all hard-pulls for user
           const allPullsSnap = await db
             .collection('user_stocks_conso')
             .where('stock', '==', 'user_hard_pulls')
             .where('userRef', '==', userDocRef)
             .get();
-          // 2) filter in memory for those in last 12 months
-          const recent = allPullsSnap.docs.filter(d => {
-            const rec = d.data().DOFRecord;
-            // DOFRecord is a Firestore Timestamp
-            return rec.toMillis() >= cutoffMs;
+          const recentPulls = allPullsSnap.docs.filter(d => {
+            return d.data().DOFRecord.toMillis() >= cutoffMs;
           });
-          currentValue = recent.length;
+          currentValue = recentPulls.length;
+          break;
+        }
+
+        case 'Credit Limit on Loans': {
+          const loansSnap = await db
+            .collection('user_stocks_conso')
+            .where('stock', '==', 'user_loans')
+            .where('userRef', '==', userDocRef)
+            .get();
+          let sumCreditLimit = 0;
+          loansSnap.docs.forEach(d => {
+            const val = d.data().creditLimit;
+            sumCreditLimit += (typeof val === 'number' ? val : 0);
+          });
+          currentValue = sumCreditLimit;
+          break;
+        }
+
+        case 'Credit Limit on Credit Cards': {
+          const cardsSnap = await db
+            .collection('user_stocks_conso')
+            .where('stock', '==', 'user_credit_cards')
+            .where('userRef', '==', userDocRef)
+            .get();
+          let sumCreditLimitCC = 0;
+          cardsSnap.docs.forEach(d => {
+            const val = d.data().creditLimit;
+            sumCreditLimitCC += (typeof val === 'number' ? val : 0);
+          });
+          currentValue = sumCreditLimitCC;
           break;
         }
 
         default:
-          continue;  // skip any unhandled Unique_Name
+          continue; // skip any unhandled Unique_Name
       }
 
       // 4) Only queue update if the value changed
