@@ -1,4 +1,4 @@
-// This function correctly calculates
+// This function correctly calculates all fields except bankruptcies (left out in first iteration, date 12 July 2025)
 // Unique_Name = Number of Loans
 // Unique_Name = Number of Credit Cards
 // Unique_Name = Number of Annual Fee Cards
@@ -11,7 +11,7 @@
 // Unique_Name = Balance on Credit Cards
 // Unique_Name = Amounts owed on card lates
 // Unique_Name = Amounts owed on loan lates
-// Unique_Name = Amounts owed on 
+// Unique_Name = Amounts owed on charge offs
 // Unique_Name = Amounts owed on account collections
 // Unique_Name = Amounts owed on 3rd party collections
 
@@ -33,7 +33,7 @@ exports.computeUserHighAchieverCurrentValues = functions
     // Fetch user's target_date
     const userSnap = await userRef.get();
     const userData = userSnap.data() || {};
-    const targetTs = userData.target_date;               // Firestore Timestamp
+    const targetTs = userData.target_date;
     const targetDate = targetTs ? targetTs.toDate() : null;
 
     // 1) Load all user_high_achiever_targets docs
@@ -52,10 +52,10 @@ exports.computeUserHighAchieverCurrentValues = functions
 
     // 3) Loop through each doc and compute Current_Value
     for (const doc of targetsSnap.docs) {
-      const data         = doc.data();
-      const docRef       = db.collection('user_high_achiever_targets').doc(doc.id);
-      const oldValue     = data.Current_Value;
-      let   currentValue = oldValue;
+      const data = doc.data();
+      const docRef = db.collection('user_high_achiever_targets').doc(doc.id);
+      const oldValue = data.Current_Value;
+      let currentValue = oldValue;
 
       switch (data.Unique_Name) {
         case 'Number of Loans': {
@@ -101,7 +101,6 @@ exports.computeUserHighAchieverCurrentValues = functions
         }
 
         case 'Number of CFA Loans': {
-          // New: count loans with isCFA = true
           const snap = await db
             .collection('user_stocks_conso')
             .where('stock','==','user_loans')
@@ -146,10 +145,11 @@ exports.computeUserHighAchieverCurrentValues = functions
             .where('stock','==','user_hard_pulls')
             .where('userRef','==',userRef)
             .get();
-          const recent = pullsSnap.docs.filter(d=>
-            d.data().DOFRecord.toMillis()>= (new Date(now.getFullYear()-1, now.getMonth(), now.getDate()).getTime())
-          );
-          currentValue = recent.length;
+          const cutoffThePastYear = new Date(now);
+          cutoffThePastYear.setFullYear(cutoffThePastYear.getFullYear() - 1);
+          currentValue = pullsSnap.docs.filter(d =>
+            d.data().DOFRecord.toMillis() >= cutoffThePastYear.getTime()
+          ).length;
           break;
         }
 
@@ -199,14 +199,14 @@ exports.computeUserHighAchieverCurrentValues = functions
             .where('stock','==','user_loans_late_payments')
             .where('userRef','==',userRef)
             .get();
-          let sumLoanLates=0;
-          for(const lateDoc of latesSnap.docs){
-            const src=(await db.collection('user_loans_late_payments').doc(lateDoc.id).get()).data()||{};
-            if(!src.chargedOff&&!src.sentToCollections){
-              sumLoanLates+=lateDoc.data().amountsOwed||0;
+          let sumLoanLates = 0;
+          for (const lateDoc of latesSnap.docs) {
+            const src = (await db.collection('user_loans_late_payments').doc(lateDoc.id).get()).data()||{};
+            if (!src.chargedOff && !src.sentToCollections) {
+              sumLoanLates += lateDoc.data().amountsOwed||0;
             }
           }
-          currentValue=sumLoanLates;
+          currentValue = sumLoanLates;
           break;
         }
 
@@ -216,14 +216,14 @@ exports.computeUserHighAchieverCurrentValues = functions
             .where('stock','==','user_credit_cards_late_payments')
             .where('userRef','==',userRef)
             .get();
-          let sumCardLates=0;
-          for(const lateDoc of latesSnap.docs){
-            const src=(await db.collection('user_credit_cards_late_payments').doc(lateDoc.id).get()).data()||{};
-            if(!src.chargedOff&&!src.sentToCollections){
-              sumCardLates+=lateDoc.data().amountsOwed||0;
+          let sumCardLates = 0;
+          for (const lateDoc of latesSnap.docs) {
+            const src = (await db.collection('user_credit_cards_late_payments').doc(lateDoc.id).get()).data()||{};
+            if (!src.chargedOff && !src.sentToCollections) {
+              sumCardLates += lateDoc.data().amountsOwed||0;
             }
           }
-          currentValue=sumCardLates;
+          currentValue = sumCardLates;
           break;
         }
 
@@ -236,14 +236,38 @@ exports.computeUserHighAchieverCurrentValues = functions
             ])
             .where('userRef','==',userRef)
             .get();
-          let sumCollected=0;
-          for(const lateDoc of latesSnap.docs){
-            const src=(await db.collection(lateDoc.data().stock).doc(lateDoc.id).get()).data()||{};
-            if(src.sentToCollections){
-              sumCollected+=lateDoc.data().amountsOwed||0;
+          let sumCollected = 0;
+          for (const lateDoc of latesSnap.docs) {
+            const stockColl = lateDoc.data().stock;
+            const src = (await db.collection(stockColl).doc(lateDoc.id).get()).data()||{};
+            if (src.sentToCollections) {
+              sumCollected += lateDoc.data().amountsOwed||0;
             }
           }
-          currentValue=sumCollected;
+          currentValue = sumCollected;
+          break;
+        }
+
+        case 'Amounts owed on charge offs': {
+          const latesSnap = await db
+            .collection('user_stocks_conso')
+            .where('stock','in',[
+              'user_credit_cards_late_payments',
+              'user_loans_late_payments'
+            ])
+            .where('userRef','==',userRef)
+            .get();
+          let sumChargedOff = 0;
+          let chargedOffCount = 0;
+          for (const lateDoc of latesSnap.docs) {
+            const stockColl = lateDoc.data().stock;
+            const src = (await db.collection(stockColl).doc(lateDoc.id).get()).data()||{};
+            if (src.chargedOff && !src.sentToCollections) {
+              sumChargedOff += lateDoc.data().amountsOwed||0;
+              chargedOffCount++;
+            }
+          }
+          currentValue = chargedOffCount > 0 ? sumChargedOff : null;
           break;
         }
 
@@ -253,20 +277,18 @@ exports.computeUserHighAchieverCurrentValues = functions
             .where('stock','==','user_collections_3rd_party')
             .where('userRef','==',userRef)
             .get();
-          currentValue = collSnap.docs.reduce((sum,d)=>sum+(d.data().
- amountsOwed||0),0);
+          currentValue = collSnap.docs.reduce((sum,d)=>sum+(d.data().amountsOwed||0),0);
           break;
         }
 
         case 'Number of cards used 2m to target': {
-          // only if target_date within 2 months
           if (targetDate && targetDate <= twoMonthsLater) {
             const snap = await db
               .collection('user_stocks_conso')
               .where('stock','==','user_credit_cards')
               .where('userRef','==',userRef)
               .get();
-            currentValue = snap.docs.filter(d => (d.data().amountsOwed || 0) > 0).length;
+            currentValue = snap.docs.filter(d => (d.data().amountsOwed||0) > 0).length;
           } else {
             currentValue = null;
           }
