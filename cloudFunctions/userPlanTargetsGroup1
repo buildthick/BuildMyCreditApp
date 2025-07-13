@@ -1,0 +1,93 @@
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+exports.userPlanTargetsGroup1 = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    if (!context.auth || !context.auth.uid) {
+      throw new functions.https.HttpsError('unauthenticated','Must be signed in.');
+    }
+    const uid = context.auth.uid;
+    const db = admin.firestore();
+    const userRef = db.doc(`users/${uid}`);
+
+    // 1) Fetch user's target_date
+    const userSnap = await userRef.get();
+    const targetTs = userSnap.data()?.target_date;
+    if (!targetTs) {
+      throw new functions.https.HttpsError('failed-precondition','No target_date set');
+    }
+    const planEnd = targetTs.toDate();
+    const nowNY = new Date().toLocaleString('en-US',{ timeZone: 'America/New_York' });
+    const nowDate = new Date(nowNY);
+    const msLeft = planEnd.getTime() - nowDate.getTime();
+    const daysLeftInPlan   = Math.floor(msLeft / (1000*60*60*24));
+    const monthsLeftInPlan = daysLeftInPlan / 30;
+
+    // 2) Load plan docs for Group 1
+    const planSnap = await db
+      .collection('user_plan_targets')
+      .where('userRef','==',userRef)
+      .where('CloudFunctionGroup','==',1)
+      .get();
+    if (planSnap.empty) {
+      return { success:true, processed:0 };
+    }
+
+    // 3) Load master specs for Group 1
+    const masterSnap = await db
+      .collection('credit_high_achievers_targets')
+      .where('CloudFunctionGroup','==',1)
+      .get();
+    const masterByName = {};
+    masterSnap.docs.forEach(d => masterByName[d.data().Unique_Name] = d.data());
+
+    // 4) Build planByName for quick access to Current_Value
+    const planByName = {};
+    planSnap.docs.forEach(d => planByName[d.data().Unique_Name] = d.data());
+
+    // 5) Compute unrestricted variables locally
+    const ml            = masterByName['Number of Loans'];
+    const pl            = planByName['Number of Loans']?.Current_Value || 0;
+    const unrestrictedOpensInstallment  = ml.Target_Value - pl;
+
+    const mcfaL         = masterByName['Number of CFA Loans'];
+    const pcfaL         = planByName['Number of CFA Loans']?.Current_Value || 0;
+    const unrestrictedClosesInstallment = mcfaL.Target_Value - pcfaL;
+
+    const mcc           = masterByName['Number of Credit Cards'];
+    const pcc           = planByName['Number of Credit Cards']?.Current_Value || 0;
+    const unrestrictedOpensRevolving   = mcc.Target_Value - pcc;
+
+    const maf           = masterByName['Number of Annual Fee Cards'];
+    const paf           = planByName['Number of Annual Fee Cards']?.Current_Value || 0;
+    const mcfaC         = masterByName['Number of CFA Cards'];
+    const pcfaC         = planByName['Number of CFA Cards']?.Current_Value || 0;
+    const unrestrictedClosesRevolving  = (maf.Target_Value - paf) + (mcfaC.Target_Value - pcfaC);
+
+    // ----
+    // At this point you have in-memory:
+    //   daysLeftInPlan, monthsLeftInPlan,
+    //   unrestrictedOpensInstallment,
+    //   unrestrictedClosesInstallment,
+    //   unrestrictedOpensRevolving,
+    //   unrestrictedClosesRevolving
+    //
+    // Next: fetch each plan doc’s constraint(s) from user_plan_target_constraints,
+    // apply them to these “unrestricted” numbers (and/or master.Target_Value),
+    // compute the final Target_Value for that doc, then write it back.
+    // ----
+
+    return {
+      success: true,
+      processed: planSnap.size,
+      // for debugging you could return the computed vars here:
+      daysLeftInPlan,
+      monthsLeftInPlan,
+      unrestrictedOpensInstallment,
+      unrestrictedClosesInstallment,
+      unrestrictedOpensRevolving,
+      unrestrictedClosesRevolving
+    };
+  });
