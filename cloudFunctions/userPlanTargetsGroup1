@@ -12,82 +12,131 @@ exports.userPlanTargetsGroup1 = functions
     const db = admin.firestore();
     const userRef = db.doc(`users/${uid}`);
 
-    // 1) Fetch user's target_date
+    // 1) Fetch user's target_date and compute time-left vars
     const userSnap = await userRef.get();
     const targetTs = userSnap.data()?.target_date;
     if (!targetTs) {
       throw new functions.https.HttpsError('failed-precondition','No target_date set');
     }
     const planEnd = targetTs.toDate();
-    const nowNY = new Date().toLocaleString('en-US',{ timeZone: 'America/New_York' });
+    const nowNY = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
     const nowDate = new Date(nowNY);
     const msLeft = planEnd.getTime() - nowDate.getTime();
-    const daysLeftInPlan   = Math.floor(msLeft / (1000*60*60*24));
+    const daysLeftInPlan = Math.floor(msLeft / (1000 * 60 * 60 * 24));
     const monthsLeftInPlan = daysLeftInPlan / 30;
 
-    // 2) Load plan docs for Group 1
+    // 2) Load all plan docs for Group 1
     const planSnap = await db
       .collection('user_plan_targets')
-      .where('userRef','==',userRef)
-      .where('CloudFunctionGroup','==',1)
+      .where('userRef','==', userRef)
+      .where('CloudFunctionGroup','==', 1)
       .get();
     if (planSnap.empty) {
-      return { success:true, processed:0 };
+      return { success: true, processed: 0 };
     }
 
-    // 3) Load master specs for Group 1
+    // 3) Load master specs for Group 1 into a map
     const masterSnap = await db
       .collection('credit_high_achievers_targets')
-      .where('CloudFunctionGroup','==',1)
+      .where('CloudFunctionGroup','==', 1)
       .get();
     const masterByName = {};
-    masterSnap.docs.forEach(d => masterByName[d.data().Unique_Name] = d.data());
+    masterSnap.docs.forEach(d => {
+      const m = d.data();
+      masterByName[m.Unique_Name] = m;
+    });
 
     // 4) Build planByName for quick access to Current_Value
     const planByName = {};
-    planSnap.docs.forEach(d => planByName[d.data().Unique_Name] = d.data());
+    planSnap.docs.forEach(d => {
+      const p = d.data();
+      planByName[p.Unique_Name] = p;
+    });
 
-    // 5) Compute unrestricted variables locally
-    const ml            = masterByName['Number of Loans'];
-    const pl            = planByName['Number of Loans']?.Current_Value || 0;
-    const unrestrictedOpensInstallment  = ml.Target_Value - pl;
+    // 5) Compute unrestricted opens/closes
+    const getMaster = name => masterByName[name]?.Target_Value || 0;
+    const getCurrent = name => planByName[name]?.Current_Value || 0;
 
-    const mcfaL         = masterByName['Number of CFA Loans'];
-    const pcfaL         = planByName['Number of CFA Loans']?.Current_Value || 0;
-    const unrestrictedClosesInstallment = mcfaL.Target_Value - pcfaL;
+    const unrestrictedOpensInstallment  = getMaster('Number of Loans') - getCurrent('Number of Loans');
+    const unrestrictedClosesInstallment = getMaster('Number of CFA Loans') - getCurrent('Number of CFA Loans');
+    const unrestrictedOpensRevolving    = getMaster('Number of Credit Cards') - getCurrent('Number of Credit Cards');
+    const closesAnnualFee               = getMaster('Number of Annual Fee Cards') - getCurrent('Number of Annual Fee Cards');
+    const closesCFAcards                = getMaster('Number of CFA Cards') - getCurrent('Number of CFA Cards');
+    const unrestrictedClosesRevolving   = closesAnnualFee + closesCFAcards;
 
-    const mcc           = masterByName['Number of Credit Cards'];
-    const pcc           = planByName['Number of Credit Cards']?.Current_Value || 0;
-    const unrestrictedOpensRevolving   = mcc.Target_Value - pcc;
+    // 6) Fetch blocker constraints (Close)
+    const blockerCloseSnap = await db
+      .collection('user_plan_target_constraints')
+      .where('userRef','==', userRef)
+      .where('CloudFunctionGroup','==', 1)
+      .where('Is_Blocker','==', true)
+      .where('Action_OR_ActionsPair','==', 'Close')
+      .orderBy('Rank_In_Group')
+      .get();
 
-    const maf           = masterByName['Number of Annual Fee Cards'];
-    const paf           = planByName['Number of Annual Fee Cards']?.Current_Value || 0;
-    const mcfaC         = masterByName['Number of CFA Cards'];
-    const pcfaC         = planByName['Number of CFA Cards']?.Current_Value || 0;
-    const unrestrictedClosesRevolving  = (maf.Target_Value - paf) + (mcfaC.Target_Value - pcfaC);
+    // 7) Fetch blocker constraints (Open)
+    const blockerOpenSnap = await db
+      .collection('user_plan_target_constraints')
+      .where('userRef','==', userRef)
+      .where('CloudFunctionGroup','==', 1)
+      .where('Is_Blocker','==', true)
+      .where('Action_OR_ActionsPair','==', 'Open')
+      .orderBy('Rank_In_Group')
+      .get();
 
-    // ----
-    // At this point you have in-memory:
-    //   daysLeftInPlan, monthsLeftInPlan,
-    //   unrestrictedOpensInstallment,
-    //   unrestrictedClosesInstallment,
-    //   unrestrictedOpensRevolving,
-    //   unrestrictedClosesRevolving
-    //
-    // Next: fetch each plan doc’s constraint(s) from user_plan_target_constraints,
-    // apply them to these “unrestricted” numbers (and/or master.Target_Value),
-    // compute the final Target_Value for that doc, then write it back.
-    // ----
+    // 8) Evaluate blockers in-memory
+    const closeBlockerResults = {};
+    planSnap.docs.forEach(d => {
+      const name = d.data().Unique_Name;
+      let override = null;
+      blockerCloseSnap.docs.forEach(bcDoc => {
+        const c = bcDoc.data();
+        if (c.Unique_Name !== name) return;
+        const current = getCurrent(name);
+        const constraint = c.Value;
+        if (c.Max_or_Min === 'min' && current < constraint) {
+          override = constraint;
+        }
+        if (c.Max_or_Min === 'max' && current > constraint) {
+          override = constraint;
+        }
+        if (override !== null) return; // first blocker in rank order
+      });
+      closeBlockerResults[name] = override;
+    });
 
+    const openBlockerResults = {};
+    planSnap.docs.forEach(d => {
+      const name = d.data().Unique_Name;
+      let override = null;
+      blockerOpenSnap.docs.forEach(boDoc => {
+        const c = boDoc.data();
+        if (c.Unique_Name !== name) return;
+        const current = getCurrent(name);
+        const constraint = c.Value;
+        if (c.Max_or_Min === 'min' && current < constraint) {
+          override = constraint;
+        }
+        if (c.Max_or_Min === 'max' && current > constraint) {
+          override = constraint;
+        }
+        if (override !== null) return;
+      });
+      openBlockerResults[name] = override;
+    });
+
+    // 9) Return all computed variables for inspection
     return {
       success: true,
       processed: planSnap.size,
-      // for debugging you could return the computed vars here:
       daysLeftInPlan,
       monthsLeftInPlan,
       unrestrictedOpensInstallment,
       unrestrictedClosesInstallment,
       unrestrictedOpensRevolving,
-      unrestrictedClosesRevolving
+      unrestrictedClosesRevolving,
+      closeBlockerResults,
+      openBlockerResults
     };
-  });
+  }
+);
