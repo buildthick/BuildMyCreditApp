@@ -4,8 +4,6 @@
 // AccountType_Variation = Utilization
 // AccountType_Variation = Number of CFA or AF Cards with 0 Balance
     // NOTE: this^ returns null if no CFA/AFs exist, and 0 when at least 1 exists but has 0 balance
-// AccountType_Variation = Minimum 1 loan
-// AccountType_Variation = Minimum 1 card
 // AccountType_Variation = Latest allowable open
 // AccountType_Variation = Latest allowable close
 // AccountType_Variation = Yearly allowable
@@ -139,20 +137,6 @@ exports.computeUserConstraintCurrentValuesGrp1 = functions.region('us-central1')
       });
       const valueCFA_AF = totalCFA_AF === 0 ? null : numZeroBalanceCFAorAF;
 
-      // --- 5) Minimum 1 loan ---
-      const loansSnap = await db
-        .collection('user_stocks_conso')
-        .where('stock','==','user_loans')
-        .get();
-      const numLoans = loansSnap.size;
-
-      // --- 6) Minimum 1 card ---
-      const cardsSnap = await db
-        .collection('user_stocks_conso')
-        .where('stock','==','user_credit_cards')
-        .get();
-      const numCards = cardsSnap.size;
-
       // --- 7) Months until target (NYC normalized) ---
       const now = new Date();
       const nowParts = getNYCDateParts(now);
@@ -254,12 +238,10 @@ exports.computeUserConstraintCurrentValuesGrp1 = functions.region('us-central1')
       const monthlyAllowable = numberCards30 + numberLoans30;
 
       // --- 10) Min interval between opens in LTM ---
-      // threshold = nowNorm minus 12 months
       const thresh = new Date(nowNorm);
       thresh.setMonth(thresh.getMonth() - 12);
       const threshNorm = new Date(thresh.getFullYear(), thresh.getMonth(), thresh.getDate());
 
-      // gather all open docs
       const openSnap = await db
         .collection('user_stocks_conso')
         .where('stock','in',['user_credit_cards','user_loans'])
@@ -286,14 +268,11 @@ exports.computeUserConstraintCurrentValuesGrp1 = functions.region('us-central1')
       // --- Batch write all metrics ---
       const batch = db.batch();
 
-      // write 1–6
       const mapping = {
         'Current accounts / lates': calRatio,
         'Revolving % of total': revPct,
         'Utilization': utilization,
-        'Number of CFA or AF Cards with 0 Balance': valueCFA_AF,
-        'Minimum 1 loan': numLoans,
-        'Minimum 1 card': numCards
+        'Number of CFA or AF Cards with 0 Balance': valueCFA_AF
       };
       for (const [variation, value] of Object.entries(mapping)) {
         const snap = await db
@@ -311,7 +290,7 @@ exports.computeUserConstraintCurrentValuesGrp1 = functions.region('us-central1')
         });
       }
 
-      // write open & close
+      // write open & close (monthsUntilTarget)
       const openVarSnap = await db
         .collection('user_plan_target_constraints')
         .where('AccountType_Variation','==','Latest allowable open')
@@ -362,7 +341,7 @@ exports.computeUserConstraintCurrentValuesGrp1 = functions.region('us-central1')
         }
       });
 
-      // write Min interval between opens
+      // write Min interval between opens in LTM
       const minSnap = await db
         .collection('user_plan_target_constraints')
         .where('AccountType_Variation','==','Min interval between opens in LTM')
