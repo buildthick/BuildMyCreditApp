@@ -1,3 +1,8 @@
+// This version does not write anything but does compute:
+// unrestricted values
+// days and months in plan
+// blockers for open/close actions
+
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 // To avoid deployment errors, do not call admin.initializeApp() in your code
@@ -64,7 +69,44 @@ exports.userPlanTargetsGroup1 = functions
     const closesCFAcards                = getMaster('Number of CFA Cards') - getCurrent('Number of CFA Cards');
     const unrestrictedClosesRevolving   = closesAnnualFee + closesCFAcards;
 
-    // 6) Return computed variables for next-step logic
+    // 6) Load blocker constraints of interest
+    const blockerVars = ['Number of CFA or AF Cards with 0 Balance','Latest allowable close','Latest allowable open'];
+    const constrSnap = await db
+      .collection('user_plan_target_constraints')
+      .where('userRef','==',userRef)
+      .where('CloudFunctionGroup','==',1)
+      .where('AccountType_Variation','in',blockerVars)
+      .get();
+
+    // organize by variation
+    const byVar = {};
+    constrSnap.docs.forEach(d => byVar[d.data().AccountType_Variation] = d.data());
+
+    // 7) Evaluate closeAllowed: both close blockers must pass
+    let closeAllowed = true;
+    ['Number of CFA or AF Cards with 0 Balance','Latest allowable close']
+      .forEach(v => {
+        const c = byVar[v];
+        if (!c) return;
+        const cur = c.Current_Value;
+        const tgt = c.Value;
+        if (c.Max_or_Min === 'min' ? cur < tgt : cur > tgt) {
+          closeAllowed = false;
+        }
+      });
+
+    // 8) Evaluate openAllowed: the open blocker must pass
+    let openAllowed = true;
+    const openC = byVar['Latest allowable open'];
+    if (openC) {
+      const cur = openC.Current_Value;
+      const tgt = openC.Value;
+      if (openC.Max_or_Min === 'min' ? cur < tgt : cur > tgt) {
+        openAllowed = false;
+      }
+    }
+
+    // 9) Return all the flags + prior variables
     return {
       success: true,
       processed: planSnap.size,
@@ -73,6 +115,8 @@ exports.userPlanTargetsGroup1 = functions
       unrestrictedOpensInstallment,
       unrestrictedClosesInstallment,
       unrestrictedOpensRevolving,
-      unrestrictedClosesRevolving
+      unrestrictedClosesRevolving,
+      closeAllowed,
+      openAllowed
     };
   });
