@@ -3,7 +3,6 @@
 // Unique_Name = Number of Credit Cards
 // Unique_Name = Number of Annual Fee Cards
 // Unique_Name = Number of CFA Cards
-// Unique_Name = Revolving % of Total Accounts
 // Unique_Name = Number of Requests in LTM
 // Unique_Name = Credit Limit on Loans
 // Unique_Name = Credit Limit on Credit Cards
@@ -108,34 +107,6 @@ exports.computeUserHighAchieverCurrentValues = functions
             .where('isCFA','==',true)
             .get();
           currentValue = snap.size;
-          break;
-        }
-
-        case 'Revolving % of Total Accounts': {
-          const revSnap = await db
-            .collection('user_stocks_conso')
-            .where('subStock','==','Revolving')
-            .where('userRef','==',userRef)
-            .get();
-          const totalRevolving = revSnap.docs.filter(d => {
-            const s = d.data().stock;
-            return s!=='user_hard_pulls' && s!=='user_credit_cards_late_payments';
-          }).length;
-
-          const instSnap = await db
-            .collection('user_stocks_conso')
-            .where('subStock','==','Installment')
-            .where('userRef','==',userRef)
-            .get();
-          const totalInstallment = instSnap.docs.filter(d => {
-            const s = d.data().stock;
-            return s!=='user_hard_pulls' && s!=='user_loans_late_payments';
-          }).length;
-
-          const totalAccounts = totalRevolving + totalInstallment;
-          currentValue = totalAccounts>0 
-            ? totalRevolving/totalAccounts 
-            : 0;
           break;
         }
 
