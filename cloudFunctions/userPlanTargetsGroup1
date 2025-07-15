@@ -64,68 +64,7 @@ exports.userPlanTargetsGroup1 = functions
     const closesCFAcards                = getMaster('Number of CFA Cards') - getCurrent('Number of CFA Cards');
     const unrestrictedClosesRevolving   = closesAnnualFee + closesCFAcards;
 
-    // 6) Fetch blocker constraints (Close)
-    const blockerCloseSnap = await db
-      .collection('user_plan_target_constraints')
-      .where('userRef','==', userRef)
-      .where('CloudFunctionGroup','==', 1)
-      .where('Is_Blocker','==', true)
-      .where('Action_OR_ActionsPair','==', 'Close')
-      .orderBy('Rank_In_Group')
-      .get();
-
-    // 7) Fetch blocker constraints (Open)
-    const blockerOpenSnap = await db
-      .collection('user_plan_target_constraints')
-      .where('userRef','==', userRef)
-      .where('CloudFunctionGroup','==', 1)
-      .where('Is_Blocker','==', true)
-      .where('Action_OR_ActionsPair','==', 'Open')
-      .orderBy('Rank_In_Group')
-      .get();
-
-    // 8) Evaluate blockers in-memory
-    const closeBlockerResults = {};
-    planSnap.docs.forEach(d => {
-      const name = d.data().Unique_Name;
-      let override = null;
-      blockerCloseSnap.docs.forEach(bcDoc => {
-        const c = bcDoc.data();
-        if (c.Unique_Name !== name) return;
-        const current = getCurrent(name);
-        const constraint = c.Value;
-        if (c.Max_or_Min === 'min' && current < constraint) {
-          override = constraint;
-        }
-        if (c.Max_or_Min === 'max' && current > constraint) {
-          override = constraint;
-        }
-        if (override !== null) return; // first blocker in rank order
-      });
-      closeBlockerResults[name] = override;
-    });
-
-    const openBlockerResults = {};
-    planSnap.docs.forEach(d => {
-      const name = d.data().Unique_Name;
-      let override = null;
-      blockerOpenSnap.docs.forEach(boDoc => {
-        const c = boDoc.data();
-        if (c.Unique_Name !== name) return;
-        const current = getCurrent(name);
-        const constraint = c.Value;
-        if (c.Max_or_Min === 'min' && current < constraint) {
-          override = constraint;
-        }
-        if (c.Max_or_Min === 'max' && current > constraint) {
-          override = constraint;
-        }
-        if (override !== null) return;
-      });
-      openBlockerResults[name] = override;
-    });
-
-    // 9) Return all computed variables for inspection
+    // 6) Return computed variables for next-step logic
     return {
       success: true,
       processed: planSnap.size,
@@ -134,9 +73,6 @@ exports.userPlanTargetsGroup1 = functions
       unrestrictedOpensInstallment,
       unrestrictedClosesInstallment,
       unrestrictedOpensRevolving,
-      unrestrictedClosesRevolving,
-      closeBlockerResults,
-      openBlockerResults
+      unrestrictedClosesRevolving
     };
-  }
-);
+  });
