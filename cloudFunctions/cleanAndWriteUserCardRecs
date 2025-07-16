@@ -1,0 +1,91 @@
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+// admin.initializeApp(); // already initialized elsewhere
+
+exports.cleanAndWriteUserCardRecs = functions.region('us-central1').https.onCall(
+  async (data, context) => {
+    if (!context.auth || !context.auth.uid) {
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'You must be logged in to perform this action.'
+      );
+    }
+
+    const uid = context.auth.uid;
+    const db = admin.firestore();
+
+    const userRef = db.collection('users').doc(uid);
+    const userSnap = await userRef.get();
+    const userData = userSnap.data();
+
+    const rewardPref = userData.card_reward_preference;
+    if (!rewardPref) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'User does not have a card_reward_preference set.'
+      );
+    }
+
+    const userCardsRef = db.collection('user_card_recommendations');
+    const offersCardsRef = db.collection('offers_cards');
+
+    // Fetch existing recommendations for this user
+    const existingSnap = await userCardsRef
+      .where('userRef', '==', userRef)
+      .get();
+
+    const existingDocs = existingSnap.docs.map(doc => doc.data());
+
+    // Fetch offers_cards filtered by rewardType
+    const offersSnap = await offersCardsRef
+      .where('rewardType', '==', rewardPref)
+      .get();
+
+    const filteredOffers = offersSnap.docs.map(doc => doc.data());
+
+    // Remove isAccepted & dateAccepted & userRef for comparison
+    const cleanedExisting = existingDocs.map(doc => {
+      const { isAccepted, dateAccepted, userRef, ...rest } = doc;
+      return rest;
+    });
+
+    const cleanedOffers = filteredOffers.map(doc => {
+      const { isAccepted, dateAccepted, ...rest } = doc;
+      return rest;
+    });
+
+    // Compare existing & offers
+    const isEqual =
+      cleanedExisting.length === cleanedOffers.length &&
+      cleanedExisting.every(e =>
+        cleanedOffers.some(o => JSON.stringify(o) === JSON.stringify(e))
+      );
+
+    if (isEqual) {
+      console.log('No changes detected. Skipping write.');
+      return { success: true, message: 'No changes detected.' };
+    }
+
+    // Delete existing recommendations for this user
+    const batch = db.batch();
+    existingSnap.forEach(doc => batch.delete(doc.ref));
+
+    // Write new recommendations
+    filteredOffers.forEach(offer => {
+      const newDocRef = userCardsRef.doc();
+      batch.set(newDocRef, {
+        ...offer,
+        userRef: userRef,
+      });
+    });
+
+    await batch.commit();
+
+    return {
+      success: true,
+      message: 'User card recommendations reset.',
+      deleted: existingDocs.length,
+      written: filteredOffers.length,
+    };
+  }
+);
