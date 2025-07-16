@@ -1,0 +1,103 @@
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+exports.writeCloseCandidates = functions.region('us-central1').https.onCall(
+  async (data, context) => {
+    if (!context.auth || !context.auth.uid) {
+      throw new functions.https.HttpsError('unauthenticated','Must be signed in.');
+    }
+    const uid = context.auth.uid;
+    const db = admin.firestore();
+    const userRef = db.doc(`users/${uid}`);
+
+    // 1) Find all CFA or AF cards in user_stocks_conso
+    const cardConsoSnap = await db
+      .collection('user_stocks_conso')
+      .where('stock','==','user_credit_cards')
+      .where('userRef','==',userRef)
+      .get();
+
+    const cardDocs = cardConsoSnap.docs.filter(d => {
+      const { isCFA, isAnnualFee } = d.data();
+      return isCFA === true || isAnnualFee === true;
+    });
+    const candidateIds = cardDocs.map(d => d.id);
+
+    // 2) Initialize totals map with each card's balance (amountsOwed)
+    const totals = {};
+    cardDocs.forEach(d => {
+      totals[d.id] = d.data().amountsOwed || 0;
+    });
+
+    // 3) Add unpaid late-payment amounts from user_credit_cards_late_payments
+    const lateSnap = await db
+      .collection('user_credit_cards_late_payments')
+      .where('userRef','==',userRef)
+      .where('isPaid','==', false)
+      .get();
+
+    lateSnap.docs.forEach(ld => {
+      const late = ld.data();
+      const ref = late.cardRef;
+      const cardId = ref.id;
+      if (candidateIds.includes(cardId)) {
+        totals[cardId] = (totals[cardId] || 0) + (late.amount || 0);
+      }
+    });
+
+    // 4) Load existing candidate IDs for cleanup
+    const existingSnap = await db
+      .collection('user_card_close_candidates')
+      .where('userRef','==',userRef)
+      .get();
+    const existingIds = new Set(existingSnap.docs.map(d => d.id));
+
+    const batch = db.batch();
+
+    if (candidateIds.length === 0) {
+      // No candidates → delete all old and write nullPlaceholder
+      existingIds.forEach(id => {
+        batch.delete(db.collection('user_card_close_candidates').doc(id));
+      });
+      batch.set(
+        db.collection('user_card_close_candidates').doc('nullPlaceholder'),
+        { userRef, lender: 'nullPlaceholder' },
+        { merge: true }
+      );
+    } else {
+      // 5) Delete any candidates no longer relevant
+      existingIds.forEach(id => {
+        if (!candidateIds.includes(id)) {
+          batch.delete(db.collection('user_card_close_candidates').doc(id));
+        }
+      });
+
+      // 6) Upsert each candidate
+      for (const d of cardDocs) {
+        const cardId = d.id;
+        const cardRef = db.collection('user_credit_cards').doc(cardId);
+        const cardSnap = await cardRef.get();
+        const { lender } = cardSnap.data() || {};
+
+        const payoff = totals[cardId] || 0;
+        const mustBePaidOff = payoff > 0 ? 'Yes' : 'No';
+
+        const destRef = db.collection('user_card_close_candidates').doc(cardId);
+        batch.set(
+          destRef,
+          {
+            userRef,
+            lender,
+            totalToPayBeforeClose: payoff,
+            mustBePaidOff
+          },
+          { merge: true }
+        );
+      }
+    }
+
+    await batch.commit();
+    return { success: true, count: candidateIds.length };
+  }
+);
