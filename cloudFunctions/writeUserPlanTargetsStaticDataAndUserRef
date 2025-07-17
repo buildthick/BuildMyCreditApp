@@ -1,0 +1,51 @@
+// Takes static data from credit_high_achievers and 'copies' to user_plan_targets
+
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+exports.writeUserPlanTargetsStaticDataAndUserRef = functions.region('us-central1').https.onCall(
+  async (data, context) => {
+    if (!context.auth || !context.auth.uid) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be signed in.');
+    }
+
+    const uid = context.auth.uid;
+    const db = admin.firestore();
+    const userRef = db.doc(`users/${uid}`);
+
+    // 1) Load all master specs (no group filter)
+    const masterSnap = await db
+      .collection('credit_high_achievers_targets')
+      .get();
+
+    if (masterSnap.empty) {
+      // nothing to do
+      return { success: true, processed: 0 };
+    }
+
+    // 2) Prepare batch
+    const batch = db.batch();
+
+    // 3) Copy static fields for each spec into user_plan_targets
+    masterSnap.docs.forEach(mDoc => {
+      const m = mDoc.data();
+      // Strip out the dynamic fields (we'll fill those later)
+      const { Target_Value, Current_Value, ...staticFields } = m;
+
+      const planRef = db.collection('user_plan_targets').doc(mDoc.id);
+      batch.set(
+        planRef,
+        {
+          userRef,         // write the authenticated user
+          ...staticFields, // AccountType, Action_OR_ActionsPair, etc.
+        },
+        { merge: true }
+      );
+    });
+
+    // 4) Commit
+    await batch.commit();
+    return { success: true, processed: masterSnap.size };
+  }
+);
