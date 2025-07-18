@@ -1,3 +1,5 @@
+// THIS COMPUTES FOR GROUP1 ONLY
+
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 // To avoid deployment errors, do not call admin.initializeApp() in your code
