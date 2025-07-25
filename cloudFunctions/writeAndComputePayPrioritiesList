@@ -1,0 +1,274 @@
+const functions = require('firebase-functions');
+const admin     = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+exports.writeAndComputePayPrioritiesList = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    if (!context.auth.uid) {
+      throw new functions.https.HttpsError('unauthenticated','Must be signed in.');
+    }
+    const db = admin.firestore();
+    const uid = context.auth.uid;
+    const userRef = db.doc(`users/${uid}`);
+    const now = Date.now();
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+    // 1) Load user budget
+    const userSnap = await userRef.get();
+    const monthlyBudget = userSnap.get('monthly_budget') || 0;
+
+    // 2) Load stocks (exclude hard pulls)
+    const stocksSnap = await db
+      .collection('user_stocks_conso')
+      .where('userRef','==',userRef)
+      .get();
+    const raw = [];
+    stocksSnap.forEach(doc => {
+      const d = doc.data();
+      if (d.stock === 'user_hard_pulls') return;
+      raw.push({ id: doc.id, data: d });
+    });
+    const rawIds = raw.map(i => i.id);
+
+    // 3) Fetch existing pay_priority_list docs for this user
+    const existingSnap = await db
+      .collection('user_pay_priority_list')
+      .where('userRef','==',userRef)
+      .get();
+    const existingMap = {};
+    existingSnap.forEach(doc => {
+      existingMap[doc.id] = doc.data();
+    });
+
+    // 4) Fetch card & loan sources
+    const cardIds = raw.filter(i => i.data.stock === 'user_credit_cards').map(i => i.id);
+    const loanIds = raw.filter(i => i.data.stock === 'user_loans').map(i => i.id);
+    const [cardDocs, loanDocs] = await Promise.all([
+      Promise.all(cardIds.map(id => db.collection('user_credit_cards').doc(id).get())),
+      Promise.all(loanIds.map(id => db.collection('user_loans').doc(id).get()))
+    ]);
+    const cardMap = {}, loanMap = {};
+    cardDocs.forEach(d => { if (d.exists) cardMap[d.id] = d.data(); });
+    loanDocs.forEach(d => { if (d.exists) loanMap[d.id] = d.data(); });
+
+    // 5) Enrich items
+    const items = raw.map(({id, data: d}) => {
+      const base = {
+        id,
+        DOFRecord: d.DOFRecord,
+        amountsOwed: d.amountsOwed || 0,
+        stockType: d.stock,
+        subStock: d.subStock,
+        name: d.name,
+        lender: d.lender,
+        isCurrent: !!d.isCurrent,
+        isPaid: !!d.isPaid,
+      };
+      const src = base.stockType === 'user_credit_cards'
+        ? (cardMap[id] || {})
+        : base.stockType === 'user_loans'
+          ? (loanMap[id] || {})
+          : {};
+
+      const apr = src.apr || 0;
+      let effectiveApr = apr;
+      if (src.hasPromoAPR_Purchases) {
+        const end = src.endDatePromoAPR_Purchases?.toDate().getTime() || 0;
+        if (now < end) effectiveApr = src.PromoAPR_Purchases || 0;
+      }
+
+      let minOrMonthlyPayment;
+      if (!base.isCurrent && !base.isPaid) {
+        minOrMonthlyPayment = base.amountsOwed;
+      } else if (base.stockType === 'user_credit_cards') {
+        minOrMonthlyPayment = src.minimumPayment || 0;
+      } else if (base.stockType === 'user_loans') {
+        minOrMonthlyPayment = src.monthlyPayment || 0;
+      } else {
+        minOrMonthlyPayment = 0;
+      }
+
+      const monthlyRate = effectiveApr / 100 / 12;
+      const unpaid = Math.max(0, base.amountsOwed - minOrMonthlyPayment);
+      const interestOnUnpaid = unpaid * monthlyRate;
+      const projectedNextBalance = base.amountsOwed + interestOnUnpaid;
+      const projectedNextMinPayment = base.stockType === 'user_credit_cards'
+        ? parseFloat((projectedNextBalance * 0.10).toFixed(2))
+        : minOrMonthlyPayment;
+
+      const interestCostOfMinPayment = minOrMonthlyPayment * monthlyRate;
+      const effectiveInterestRate = base.amountsOwed * monthlyRate;
+
+      let effectivePrincipalPayoff = 0;
+      if (base.stockType === 'user_loans' && minOrMonthlyPayment > 0) {
+        const principalPortion = minOrMonthlyPayment - (base.amountsOwed * monthlyRate);
+        effectivePrincipalPayoff = Math.max(0, principalPortion / minOrMonthlyPayment);
+      }
+
+      const daysSince = Math.floor((now - d.DOFRecord.toDate().getTime()) / MS_PER_DAY);
+      const rawTier = Math.ceil(daysSince / 30) * 30;
+      const severity = String(Math.min(180, Math.max(30, rawTier)));
+
+      return {
+        id,
+        DOFRecord:               base.DOFRecord,
+        amountsOwed:             base.amountsOwed,
+        apr,
+        hasPurchasePromoAPR:     !!src.hasPromoAPR_Purchases,
+        purchasePromoAPR:        src.PromoAPR_Purchases || 0,
+        endPurchasePromoAPR:     src.endDatePromoAPR_Purchases?.toDate() || null,
+        hasBalTransferPromoAPR:  !!src.hasPromoAPR_BalTransfer,
+        balTransferPromoAPR:     src.PromoAPR_BalTransfer || 0,
+        endBalTransferPromoAPR:  src.endDatePromoAPR_BalTransfer?.toDate() || null,
+        minOrMonthlyPayment,
+        interestCostOfMinPayment,
+        effectiveInterestRate,
+        projectedNextBalance,
+        projectedNextMinPayment,
+        effectivePrincipalPayoff,
+        severity,
+        dueDay:                   src.dayOfMonthDue || null,
+        isAnnualFee:             !!d.isAnnualFee,
+        isCFA:                   !!d.isCFA,
+        isCurrent:               base.isCurrent,
+        isPaid:                  base.isPaid,
+        lender:                  base.lender,
+        name:                    base.name,
+        stockType:               base.stockType,
+        subStock:                base.subStock,
+        userRef:                 d.userRef,
+        budgetAllocated:         0,
+        wouldBumbNextBudget:     false
+      };
+    });
+
+    // 6) Mandatory payments
+    let budgetLeft = monthlyBudget;
+    items
+      .filter(i => (i.stockType.endsWith('_late_payments') || i.stockType === 'user_collections_3rd_party') && !i.isPaid)
+      .sort((a,b) => parseInt(b.severity) - parseInt(a.severity))
+      .forEach(i => {
+        if (budgetLeft <= 0) return;
+        const pay = Math.min(budgetLeft, i.minOrMonthlyPayment);
+        i.budgetAllocated = pay;
+        budgetLeft -= pay;
+      });
+    items
+      .filter(i => i.stockType === 'user_credit_cards')
+      .sort((a,b) => b.effectiveInterestRate - a.effectiveInterestRate)
+      .forEach(i => {
+        if (budgetLeft <= 0) return;
+        const pay = Math.min(budgetLeft, i.minOrMonthlyPayment);
+        i.budgetAllocated = pay;
+        budgetLeft -= pay;
+      });
+    items
+      .filter(i => i.stockType === 'user_loans')
+      .sort((a,b) => b.effectivePrincipalPayoff - a.effectivePrincipalPayoff)
+      .forEach(i => {
+        if (budgetLeft <= 0) return;
+        const pay = Math.min(budgetLeft, i.minOrMonthlyPayment);
+        i.budgetAllocated = pay;
+        budgetLeft -= pay;
+      });
+
+    // 7) Extra allocations & Mode
+    const availableRemainder = budgetLeft;
+    const sumProjMins = items.reduce((sum,i) => sum + i.projectedNextMinPayment, 0);
+    const hasLates = items.some(i =>
+      (i.stockType.endsWith('_late_payments') || i.stockType === 'user_collections_3rd_party') && !i.isPaid
+    );
+    let mode = 'Normal';
+    if (hasLates) {
+      mode = (sumProjMins > monthlyBudget && availableRemainder > 0)
+        ? 'Prevent Future Failure'
+        : 'Damage Control';
+    }
+
+    if (mode === 'Prevent Future Failure') {
+      let runSum = sumProjMins;
+      items
+        .filter(i => i.stockType === 'user_credit_cards' && i.isCurrent)
+        .sort((a,b) => b.effectiveInterestRate - a.effectiveInterestRate)
+        .forEach(i => {
+          if (runSum <= monthlyBudget || budgetLeft <= 0) return;
+          const over = runSum - monthlyBudget;
+          const needed = over / 0.10;
+          const cap = i.amountsOwed - i.budgetAllocated;
+          const pay = Math.min(budgetLeft, needed, cap);
+          i.budgetAllocated += pay;
+          runSum -= pay * 0.10;
+          budgetLeft -= pay;
+        });
+    } else if (mode === 'Damage Control') {
+      items
+        .filter(i =>
+          (i.stockType.endsWith('_late_payments') || i.stockType === 'user_collections_3rd_party') && !i.isPaid
+        )
+        .sort((a,b) => parseInt(b.severity) - parseInt(a.severity))
+        .forEach(i => {
+          if (budgetLeft <= 0) return;
+          const cap = i.amountsOwed - i.budgetAllocated;
+          const pay = Math.min(budgetLeft, cap);
+          i.budgetAllocated += pay;
+          budgetLeft -= pay;
+        });
+    }
+
+    // 8) Rank
+    items.forEach(i => {
+      if (
+        (i.stockType.endsWith('_late_payments') || i.stockType === 'user_collections_3rd_party')
+        && !i.isPaid
+      ) {
+        i.bucket = 1;
+      } else if (mode === 'Prevent Future Failure' && i.budgetAllocated > i.minOrMonthlyPayment) {
+        i.bucket = 2;
+      } else if (
+        mode === 'Damage Control' && i.stockType.endsWith('_late_payments') && i.budgetAllocated > 0
+      ) {
+        i.bucket = 3;
+      } else if (mode === 'Damage Control' && i.stockType === 'user_credit_cards') {
+        i.bucket = 4;
+      } else if (mode === 'Damage Control' && i.stockType === 'user_loans') {
+        i.bucket = 5;
+      } else if (mode === 'Normal' && i.stockType === 'user_credit_cards') {
+        i.bucket = 6;
+      } else if (mode === 'Normal' && i.stockType === 'user_loans') {
+        i.bucket = 7;
+      } else {
+        i.bucket = 8;
+      }
+    });
+    items.sort((a,b) => {
+      if (a.bucket !== b.bucket) return a.bucket - b.bucket;
+      if (a.bucket === 1) return parseInt(b.severity) - parseInt(a.severity);
+      if (a.stockType === 'user_credit_cards') return b.effectiveInterestRate - a.effectiveInterestRate;
+      if (a.stockType === 'user_loans') return b.effectivePrincipalPayoff - a.effectivePrincipalPayoff;
+      return 0;
+    });
+    items.forEach((i, idx) => { i.rank = idx + 1; delete i.bucket; });
+
+    // 9) Batch write only changed + delete removed
+    const batch = db.batch();
+    
+    // Delete any old docs no longer in the consolidated list
+    existingSnap.forEach(docSnap => {
+      if (!rawIds.includes(docSnap.id)) {
+        batch.delete(docSnap.ref);
+      }
+    });
+
+    // Set only those whose data changed
+    items.forEach(i => {
+      const prev = existingMap[i.id];
+      const nowData = { ...i, mode, availableRemainder, rank: i.rank };
+      if (!prev || JSON.stringify(prev) !== JSON.stringify(nowData)) {
+        batch.set(db.collection('user_pay_priority_list').doc(i.id), nowData, { merge: true });
+      }
+    });
+
+    await batch.commit();
+    return { success: true };
+  });
