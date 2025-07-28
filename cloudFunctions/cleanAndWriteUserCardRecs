@@ -1,3 +1,5 @@
+//This version includes offerLink so user may apply from app
+
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 // admin.initializeApp(); // already initialized elsewhere
@@ -26,7 +28,7 @@ exports.cleanAndWriteUserCardRecs = functions.region('us-central1').https.onCall
       );
     }
 
-    const userCardsRef = db.collection('user_card_recommendations');
+    const userCardsRef  = db.collection('user_card_recommendations');
     const offersCardsRef = db.collection('offers_cards');
 
     // Fetch existing recommendations for this user
@@ -43,18 +45,17 @@ exports.cleanAndWriteUserCardRecs = functions.region('us-central1').https.onCall
 
     const filteredOffers = offersSnap.docs.map(doc => doc.data());
 
-    // Remove isAccepted & dateAccepted & userRef for comparison
+    // Normalize for comparison (strip fields that will differ)
     const cleanedExisting = existingDocs.map(doc => {
       const { isAccepted, dateAccepted, userRef, ...rest } = doc;
       return rest;
     });
-
     const cleanedOffers = filteredOffers.map(doc => {
       const { isAccepted, dateAccepted, ...rest } = doc;
       return rest;
     });
 
-    // Compare existing & offers
+    // If nothing changed, bail out
     const isEqual =
       cleanedExisting.length === cleanedOffers.length &&
       cleanedExisting.every(e =>
@@ -66,17 +67,21 @@ exports.cleanAndWriteUserCardRecs = functions.region('us-central1').https.onCall
       return { success: true, message: 'No changes detected.' };
     }
 
-    // Delete existing recommendations for this user
+    // Otherwise, delete and rewrite
     const batch = db.batch();
     existingSnap.forEach(doc => batch.delete(doc.ref));
 
-    // Write new recommendations
     filteredOffers.forEach(offer => {
       const newDocRef = userCardsRef.doc();
-      batch.set(newDocRef, {
-        ...offer,
-        userRef: userRef,
-      });
+      batch.set(
+        newDocRef,
+        {
+          ...offer,                 // spreads all offer fields, including offerLink
+          offerLink: offer.offerLink ?? null,  // explicitly ensure offerLink is set
+          userRef
+        },
+        { merge: true }
+      );
     });
 
     await batch.commit();
