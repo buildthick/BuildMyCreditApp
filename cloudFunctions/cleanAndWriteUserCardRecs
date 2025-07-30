@@ -1,11 +1,32 @@
 //This version includes offerLink so user may apply from app
+// This version includes writing the docID = lender+name+randChar5
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 // admin.initializeApp(); // already initialized elsewhere
 
-exports.cleanAndWriteUserCardRecs = functions.region('us-central1').https.onCall(
-  async (data, context) => {
+// Helper to generate a 5-character alphanumeric string
+function randomSuffix(length = 5) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+// Helper to slugify lender + name into a safe ID
+function makeDocId(lender = '', name = '') {
+  const base = `${lender}-${name}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')   // non-alphanumerics → dash
+    .replace(/^-+|-+$/g, '');      // trim leading/trailing dashes
+  return `${base}-${randomSuffix()}`;
+}
+
+exports.cleanAndWriteUserCardRecs = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
     if (!context.auth || !context.auth.uid) {
       throw new functions.https.HttpsError(
         'unauthenticated',
@@ -15,7 +36,6 @@ exports.cleanAndWriteUserCardRecs = functions.region('us-central1').https.onCall
 
     const uid = context.auth.uid;
     const db = admin.firestore();
-
     const userRef = db.collection('users').doc(uid);
     const userSnap = await userRef.get();
     const userData = userSnap.data();
@@ -31,21 +51,20 @@ exports.cleanAndWriteUserCardRecs = functions.region('us-central1').https.onCall
     const userCardsRef  = db.collection('user_card_recommendations');
     const offersCardsRef = db.collection('offers_cards');
 
-    // Fetch existing recommendations for this user
+    // 1) Fetch existing recommendations
     const existingSnap = await userCardsRef
       .where('userRef', '==', userRef)
       .get();
 
     const existingDocs = existingSnap.docs.map(doc => doc.data());
 
-    // Fetch offers_cards filtered by rewardType
+    // 2) Fetch offers_cards filtered by rewardType
     const offersSnap = await offersCardsRef
       .where('rewardType', '==', rewardPref)
       .get();
-
     const filteredOffers = offersSnap.docs.map(doc => doc.data());
 
-    // Normalize for comparison (strip fields that will differ)
+    // 3) Normalize for comparison (strip transient fields)
     const cleanedExisting = existingDocs.map(doc => {
       const { isAccepted, dateAccepted, userRef, ...rest } = doc;
       return rest;
@@ -55,29 +74,30 @@ exports.cleanAndWriteUserCardRecs = functions.region('us-central1').https.onCall
       return rest;
     });
 
-    // If nothing changed, bail out
     const isEqual =
       cleanedExisting.length === cleanedOffers.length &&
       cleanedExisting.every(e =>
         cleanedOffers.some(o => JSON.stringify(o) === JSON.stringify(e))
       );
-
     if (isEqual) {
       console.log('No changes detected. Skipping write.');
       return { success: true, message: 'No changes detected.' };
     }
 
-    // Otherwise, delete and rewrite
+    // 4) Delete old docs and write new ones with custom IDs
     const batch = db.batch();
     existingSnap.forEach(doc => batch.delete(doc.ref));
 
     filteredOffers.forEach(offer => {
-      const newDocRef = userCardsRef.doc();
+      // build a safe doc ID: lender + name + random suffix
+      const docId = makeDocId(offer.lender, offer.commercialName);
+      const newDocRef = userCardsRef.doc(docId);
+
       batch.set(
         newDocRef,
         {
-          ...offer,                 // spreads all offer fields, including offerLink
-          offerLink: offer.offerLink ?? null,  // explicitly ensure offerLink is set
+          ...offer,
+          offerLink: offer.offerLink ?? null,
           userRef
         },
         { merge: true }
@@ -92,5 +112,4 @@ exports.cleanAndWriteUserCardRecs = functions.region('us-central1').https.onCall
       deleted: existingDocs.length,
       written: filteredOffers.length,
     };
-  }
-);
+  });
