@@ -1,33 +1,22 @@
 //This version includes offerLink so user may apply from app
-// This version includes writing the docID = lender+name+randChar5
+// This version includes writing the docID = lender+name+rewardType
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-// admin.initializeApp(); // already initialized elsewhere
+// admin.initializeApp(); // initialized elsewhere
 
-// Helper to generate a 5-character alphanumeric string
-function randomSuffix(length = 5) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let result = '';
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
-
-// Helper to slugify lender + name into a safe ID
-function makeDocId(lender = '', name = '') {
-  const base = `${lender}-${name}`
+// Helper to slugify rewardType + lender + name into a safe, stable ID
+function makeDocId(rewardType = '', lender = '', name = '') {
+  return `${rewardType}-${lender}-${name}`
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')   // non-alphanumerics → dash
     .replace(/^-+|-+$/g, '');      // trim leading/trailing dashes
-  return `${base}-${randomSuffix()}`;
 }
 
 exports.cleanAndWriteUserCardRecs = functions
   .region('us-central1')
   .https.onCall(async (data, context) => {
-    if (!context.auth || !context.auth.uid) {
+    if (!context.auth?.uid) {
       throw new functions.https.HttpsError(
         'unauthenticated',
         'You must be logged in to perform this action.'
@@ -38,9 +27,7 @@ exports.cleanAndWriteUserCardRecs = functions
     const db = admin.firestore();
     const userRef = db.collection('users').doc(uid);
     const userSnap = await userRef.get();
-    const userData = userSnap.data();
-
-    const rewardPref = userData.card_reward_preference;
+    const rewardPref = userSnap.data()?.card_reward_preference;
     if (!rewardPref) {
       throw new functions.https.HttpsError(
         'failed-precondition',
@@ -51,54 +38,49 @@ exports.cleanAndWriteUserCardRecs = functions
     const userCardsRef  = db.collection('user_card_recommendations');
     const offersCardsRef = db.collection('offers_cards');
 
-    // 1) Fetch existing recommendations
+    // 1) Load existing recs
     const existingSnap = await userCardsRef
-      .where('userRef', '==', userRef)
+      .where('userRef','==', userRef)
       .get();
+    const existingMap = {};
+    existingSnap.docs.forEach(doc => {
+      existingMap[doc.id] = doc.data();
+    });
+    const existingIds = new Set(Object.keys(existingMap));
 
-    const existingDocs = existingSnap.docs.map(doc => doc.data());
-
-    // 2) Fetch offers_cards filtered by rewardType
+    // 2) Load new offers
     const offersSnap = await offersCardsRef
-      .where('rewardType', '==', rewardPref)
+      .where('rewardType','==', rewardPref)
       .get();
-    const filteredOffers = offersSnap.docs.map(doc => doc.data());
-
-    // 3) Normalize for comparison (strip transient fields)
-    const cleanedExisting = existingDocs.map(doc => {
-      const { isAccepted, dateAccepted, userRef, ...rest } = doc;
-      return rest;
+    const offersById = {};
+    offersSnap.docs.forEach(doc => {
+      const offer = doc.data();
+      const id    = makeDocId(offer.rewardType, offer.lender, offer.commercialName);
+      offersById[id] = offer;
     });
-    const cleanedOffers = filteredOffers.map(doc => {
-      const { isAccepted, dateAccepted, ...rest } = doc;
-      return rest;
+    const offerIds = new Set(Object.keys(offersById));
+
+    // 3) Compute creates & deletes
+    const toCreate = [...offerIds].filter(id => !existingIds.has(id));
+    const toDelete = [...existingIds].filter(id => {
+      const isInOffers = offerIds.has(id);
+      const wasAccepted = existingMap[id].isAccepted === true;
+      return !isInOffers && !wasAccepted;
     });
 
-    const isEqual =
-      cleanedExisting.length === cleanedOffers.length &&
-      cleanedExisting.every(e =>
-        cleanedOffers.some(o => JSON.stringify(o) === JSON.stringify(e))
-      );
-    if (isEqual) {
-      console.log('No changes detected. Skipping write.');
-      return { success: true, message: 'No changes detected.' };
-    }
-
-    // 4) Delete old docs and write new ones with custom IDs
+    // 4) Batch it
     const batch = db.batch();
-    existingSnap.forEach(doc => batch.delete(doc.ref));
-
-    filteredOffers.forEach(offer => {
-      // build a safe doc ID: lender + name + random suffix
-      const docId = makeDocId(offer.lender, offer.commercialName);
-      const newDocRef = userCardsRef.doc(docId);
-
+    toDelete.forEach(id => batch.delete(userCardsRef.doc(id)));
+    toCreate.forEach(id => {
+      const offer = offersById[id];
       batch.set(
-        newDocRef,
+        userCardsRef.doc(id),
         {
           ...offer,
-          offerLink: offer.offerLink ?? null,
-          userRef
+          offerLink:  offer.offerLink ?? null,
+          userRef,
+          isAccepted: false    // initialize to false so UI shows it
+          // dateAccepted is left untouched if ever set
         },
         { merge: true }
       );
@@ -108,8 +90,8 @@ exports.cleanAndWriteUserCardRecs = functions
 
     return {
       success: true,
-      message: 'User card recommendations reset.',
-      deleted: existingDocs.length,
-      written: filteredOffers.length,
+      deleted: toDelete.length,
+      created: toCreate.length,
+      kept:    existingIds.size - toDelete.length
     };
   });
