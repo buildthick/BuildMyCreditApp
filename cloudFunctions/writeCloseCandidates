@@ -25,9 +25,13 @@ exports.writeCloseCandidates = functions.region('us-central1').https.onCall(
     const candidateIds = cardDocs.map(d => d.id);
 
     // 2) Initialize totals map with each card's balance (amountsOwed)
+    //    and capture credit limits
     const totals = {};
+    const creditLimits = {};
     cardDocs.forEach(d => {
-      totals[d.id] = d.data().amountsOwed || 0;
+      const data = d.data();
+      totals[d.id] = data.amountsOwed || 0;
+      creditLimits[d.id] = data.creditLimit || 0;
     });
 
     // 3) Add unpaid late-payment amounts from user_credit_cards_late_payments
@@ -39,8 +43,7 @@ exports.writeCloseCandidates = functions.region('us-central1').https.onCall(
 
     lateSnap.docs.forEach(ld => {
       const late = ld.data();
-      const ref = late.cardRef;
-      const cardId = ref.id;
+      const cardId = late.cardRef.id;
       if (candidateIds.includes(cardId)) {
         totals[cardId] = (totals[cardId] || 0) + (late.amount || 0);
       }
@@ -82,6 +85,7 @@ exports.writeCloseCandidates = functions.region('us-central1').https.onCall(
 
         const payoff = totals[cardId] || 0;
         const mustBePaidOff = payoff > 0 ? 'Yes' : 'No';
+        const creditLimit = creditLimits[cardId];
 
         const destRef = db.collection('user_card_close_candidates').doc(cardId);
         batch.set(
@@ -89,8 +93,10 @@ exports.writeCloseCandidates = functions.region('us-central1').https.onCall(
           {
             userRef,
             lender,
+            creditLimit,
             totalToPayBeforeClose: payoff,
-            mustBePaidOff
+            mustBePaidOff,
+            cardRef // ✅ new field added
           },
           { merge: true }
         );
