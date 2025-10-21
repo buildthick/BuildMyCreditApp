@@ -1,175 +1,190 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-// admin.initializeApp()
+
+// DO NOT initialize admin in FF CFs per your setup
+// if (admin.apps.length === 0) admin.initializeApp();
+// admin.firestore().settings({ ignoreUndefinedProperties: true });
 
 exports.consolidateUserStocks = functions
   .region('us-central1')
   .https.onCall(async (data, context) => {
-    // 1) Auth check
     const uid = context.auth && context.auth.uid;
     if (!uid) {
-      throw new functions.https.HttpsError('unauthenticated',
-        'Must be called while authenticated.');
+      throw new functions.https.HttpsError('unauthenticated', 'Must be called while authenticated.');
     }
 
     const db = admin.firestore();
     const userDocRef = db.doc(`users/${uid}`);
 
-    // 2) Hard pulls
-    const pullsSnap = await db
-      .collection('user_hard_pulls')
-      .where('userRef', '==', userDocRef)
-      .get();
-    await mapRequests(pullsSnap, db);
+    // 1) Hard pulls
+    const pullsSnap = await db.collection('user_hard_pulls')
+      .where('userRef', '==', userDocRef).get();
+    await mapRequests(pullsSnap, db, userDocRef);
 
-    // 3) Accounts
+    // 2) Accounts
     await mapAccounts('user_credit_cards', db, userDocRef);
-    await mapAccounts('user_loans',       db, userDocRef);
+    await mapAccounts('user_loans', db, userDocRef);
 
-    // 4) Late payments
+    // 3) Late payments
     await mapLates('user_credit_cards_late_payments', db, userDocRef);
-    await mapLates('user_loans_late_payments',       db, userDocRef);
+    await mapLates('user_loans_late_payments', db, userDocRef);
 
-    // 5) Collections (3rd party)
+    // 4) Collections (3rd party)
     await mapCollections('user_collections_3rd_party', db, userDocRef);
 
     return { success: true };
   });
 
-async function mapRequests(snap, db) {
-  if (snap.empty) return;
+// strip only undefined (null/false/0 are kept)
+function clean(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) if (v !== undefined) out[k] = v;
+  return out;
+}
+
+async function mapRequests(snap, db, userDocRef) {
+  const oldSnap = await db.collection('user_stocks_conso')
+    .where('stock', '==', 'user_hard_pulls')
+    .where('userRef', '==', userDocRef).get();
+
+  const keepIds = new Set(snap.docs.map(d => d.id));
   const batch = db.batch();
 
-  for (const doc of snap.docs) {
+  oldSnap.docs.forEach(d => { if (!keepIds.has(d.id)) batch.delete(d.ref); });
+
+  snap.docs.forEach(doc => {
     const d = doc.data();
     const consoRef = db.collection('user_stocks_conso').doc(doc.id);
-    const flatData = {
+    const flatData = clean({
       DOFRecord: d.dateOfRequest,
       userRef:   d.userRef,
       stock:     'user_hard_pulls',
       subStock:  d.debtType,
       lender:    d.lender,
       name:      d.productName
-    };
-    const existing = await consoRef.get();
-    if (!existing.exists || JSON.stringify(existing.data()) !== JSON.stringify(flatData)) {
-      batch.set(consoRef, flatData, { merge: true });
-    }
-  }
+    });
+    batch.set(consoRef, flatData, { merge: true });
+  });
 
   await batch.commit();
 }
 
 async function mapAccounts(collectionName, db, userDocRef) {
-  const snap = await db
-    .collection(collectionName)
-    .where('userRef', '==', userDocRef)
-    .get();
-  if (snap.empty) return;
+  const snap = await db.collection(collectionName)
+    .where('userRef', '==', userDocRef).get();
 
+  const oldSnap = await db.collection('user_stocks_conso')
+    .where('stock', '==', collectionName)
+    .where('userRef', '==', userDocRef).get();
+
+  const keepIds = new Set(snap.docs.map(d => d.id));
   const batch = db.batch();
-  for (const doc of snap.docs) {
+
+  oldSnap.docs.forEach(d => { if (!keepIds.has(d.id)) batch.delete(d.ref); });
+
+  snap.docs.forEach(doc => {
     const d = doc.data();
     const consoRef = db.collection('user_stocks_conso').doc(doc.id);
-    const flatData = {
-      DOFRecord: d.dateIssued,
-      userRef:   d.userRef,
-      stock:     collectionName,
-      subStock:  collectionName === 'user_credit_cards' ? 'Revolving' : 'Installment',
-      lender:    d.lender,
-      name:      d.commercialName,
-      isCurrent: d.isCurrent,
-      isCFA:     d.isCFA
-    };
-    if (collectionName === 'user_credit_cards') {
-      flatData.isAnnualFee = d.isAnnualFee;
-      flatData.creditLimit  = d.creditLimit;
-      flatData.amountsOwed  = d.totalBalance;
-    } else {
-      flatData.creditLimit = d.principalOriginal;
-      flatData.amountsOwed = d.balance;
-    }
-    const existing = await consoRef.get();
-    if (!existing.exists || JSON.stringify(existing.data()) !== JSON.stringify(flatData)) {
-      batch.set(consoRef, flatData, { merge: true });
-    }
-  }
+    const isCards = collectionName === 'user_credit_cards';
+
+    const flatData = clean({
+      DOFRecord:   d.dateIssued,
+      userRef:     d.userRef,
+      stock:       collectionName,
+      subStock:    isCards ? 'Revolving' : 'Installment',
+      lender:      d.lender,
+      name:        d.commercialName,
+      isCurrent:   d.isCurrent,                 // undefined gets removed
+      isCFA:       d.isCFA,
+      isAnnualFee: isCards ? d.isAnnualFee : undefined,
+      creditLimit: isCards ? d.creditLimit : d.principalOriginal,
+      amountsOwed: isCards ? d.totalBalance : d.balance
+    });
+
+    batch.set(consoRef, flatData, { merge: true });
+  });
+
   await batch.commit();
 }
 
 async function mapLates(collectionName, db, userDocRef) {
-  const snap = await db
-    .collection(collectionName)
-    .where('userRef', '==', userDocRef)
-    .get();
-  if (snap.empty) return;
+  const snap = await db.collection(collectionName)
+    .where('userRef', '==', userDocRef).get();
 
+  const oldSnap = await db.collection('user_stocks_conso')
+    .where('stock', '==', collectionName)
+    .where('userRef', '==', userDocRef).get();
+
+  const keepIds = new Set(snap.docs.map(d => d.id));
   const batch = db.batch();
+
+  oldSnap.docs.forEach(d => { if (!keepIds.has(d.id)) batch.delete(d.ref); });
+
   const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
   for (const doc of snap.docs) {
     const d = doc.data();
     const consoRef = db.collection('user_stocks_conso').doc(doc.id);
 
-    // Dereference account
     const accountRef = d.cardRef || d.loanRef;
-    const refData = (await accountRef.get()).data();
-
-    // Compute delta days
-    const firstMissTs = d.DOFD.toDate().getTime();
-    let deltaMs;
-    if (d.isPaid && d.datePaid) {
-      deltaMs = d.datePaid.toDate().getTime() - firstMissTs;
-    } else {
-      deltaMs = Date.now() - firstMissTs;
+    let refData = {};
+    if (accountRef && typeof accountRef.get === 'function') {
+      const refSnap = await accountRef.get();
+      refData = refSnap.exists ? (refSnap.data() || {}) : {};
     }
-    deltaMs = Math.max(0, deltaMs);
-    const days = deltaMs / MS_PER_DAY;
-    const daysRounded = Math.floor(days / 30) * 30;
 
-    // Severity
     let severity;
     if (d.sentToCollections) {
       severity = 'Collection';
     } else if (d.chargedOff) {
       severity = 'Charge Off';
-    } else {
+    } else if (d.DOFD && typeof d.DOFD.toDate === 'function') {
+      const firstMissTs = d.DOFD.toDate().getTime();
+      const paid = d.isPaid && d.datePaid && typeof d.datePaid.toDate === 'function';
+      let deltaMs = (paid ? d.datePaid.toDate().getTime() : Date.now()) - firstMissTs;
+      deltaMs = Math.max(0, deltaMs);
+      const daysRounded = Math.floor((deltaMs / MS_PER_DAY) / 30) * 30;
       severity = String(daysRounded);
     }
 
-    const flatData = {
+    const isCardsLate = collectionName === 'user_credit_cards_late_payments';
+
+    const flatData = clean({
       userRef:     d.userRef,
       stock:       collectionName,
-      subStock:    collectionName === 'user_credit_cards_late_payments' ? 'Revolving' : 'Installment',
+      subStock:    isCardsLate ? 'Revolving' : 'Installment',
       lender:      refData.lender,
       name:        refData.commercialName,
       isPaid:      d.isPaid,
       DOFRecord:   d.DOFD,
-      severity:    severity,
+      severity,
       amountsOwed: d.amount
-    };
+    });
 
-    const existing = await consoRef.get();
-    if (!existing.exists || JSON.stringify(existing.data()) !== JSON.stringify(flatData)) {
-      batch.set(consoRef, flatData, { merge: true });
-    }
+    batch.set(consoRef, flatData, { merge: true });
   }
+
   await batch.commit();
 }
 
 async function mapCollections(collectionName, db, userDocRef) {
-  const snap = await db
-    .collection(collectionName)
-    .where('userRef', '==', userDocRef)
-    .get();
-  if (snap.empty) return;
+  const snap = await db.collection(collectionName)
+    .where('userRef', '==', userDocRef).get();
 
+  const oldSnap = await db.collection('user_stocks_conso')
+    .where('stock', '==', collectionName)
+    .where('userRef', '==', userDocRef).get();
+
+  const keepIds = new Set(snap.docs.map(d => d.id));
   const batch = db.batch();
-  for (const doc of snap.docs) {
+
+  oldSnap.docs.forEach(d => { if (!keepIds.has(d.id)) batch.delete(d.ref); });
+
+  snap.docs.forEach(doc => {
     const d = doc.data();
     const consoRef = db.collection('user_stocks_conso').doc(doc.id);
 
-    const flatData = {
+    const flatData = clean({
       userRef:     d.userRef,
       stock:       collectionName,
       subStock:    'Collection',
@@ -179,12 +194,10 @@ async function mapCollections(collectionName, db, userDocRef) {
       DOFRecord:   d.DOFD,
       severity:    'Collection',
       amountsOwed: d.amount
-    };
+    });
 
-    const existing = await consoRef.get();
-    if (!existing.exists || JSON.stringify(existing.data()) !== JSON.stringify(flatData)) {
-      batch.set(consoRef, flatData, { merge: true });
-    }
-  }
+    batch.set(consoRef, flatData, { merge: true });
+  });
+
   await batch.commit();
 }
