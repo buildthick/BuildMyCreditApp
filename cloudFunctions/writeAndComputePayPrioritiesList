@@ -1,3 +1,31 @@
+/*
+Payment allocation waterfall
+
+Minimum payments:
+Allocate the minimum payment on all credit cards and the monthly payment on all loans.
+Order: descending by (interest rate × minimum payment).
+→ This allocation is recorded as minPayment.
+
+Unpaid lates:
+Allocate to unpaid late payments.
+Order: by severity — 180 days → 120 → 90 → 60 → 30.
+→ This allocation is recorded as lateSeverityPayment.
+
+Extra principal on credit cards:
+Allocate remaining budget to the difference between the minimum payment and the full balance due on credit cards.
+Order: descending by APR, then by earlier dayOfMonthDue (earlier due dates first).
+→ This allocation is recorded as cardExtra.
+
+Collections:
+Allocate to collections (either from loans/cards or from bills) in order of the highest amounts owed.
+→ This allocation is recorded as collections.
+
+This structure ensures the entire monthlyBudget is allocated,
+except when all balances are fully paid — in which case the remainder is returned to the user,
+and all PAY actions complete in the current month.
+*/
+
+
 const functions = require('firebase-functions');
 const admin     = require('firebase-admin');
 // FlutterFlow initializes admin
