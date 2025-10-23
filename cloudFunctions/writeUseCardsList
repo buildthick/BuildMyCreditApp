@@ -1,6 +1,36 @@
+/*
+1. **Scope to User**
+   * Identify current user from `context.auth.uid`.
+   * Query all `user_credit_cards` where `userRef == users/{uid}`.
+2. **Filter Step 1 – Active Cards**
+   * Keep cards where `isOpen == true` **and** `totalBalance > 0`.
+   * Count results → `countAfterStep1`.
+3. **Compute AZEO Flag**
+   * If `countAfterStep1 == 0` → `AZEO = true`.
+   * Else → `AZEO = false`.
+4. **Step 3 – Exclude Ineligible Cards**
+   * Remove any card where `isAnnualFee == true` **or** `isCFA == true`.
+5. **Step 4 – Compute Use Age**
+   * `useAgeMonths` = calendar months between `dateLastUsed` and now.
+   * If `dateLastUsed` missing → set `useAgeMonths = 1`.
+   * Sort remaining cards by `useAgeMs` (descending = oldest first).
+   * Assign `rank = 1, 2, 3...`.
+6. **Step 5 – Determine Age Risk**
+   * For each card:
+     * `atAgeRiskOrAZEOorBoth = true` if `AZEO == false` and `dateLastUsed` > 5 calendar months ago.
+     * Else `false`.
+7. **Step 6 – Upsert Results**
+   * Write one doc per candidate into `/user_use_cards_list/{cardId}`.
+   * Use `{ merge: true }` for idempotent updates (no duplicates).
+8. **Step 7 – Cleanup Orphans**
+   * Get all `/user_use_cards_list` docs for this user.
+   * If a list doc’s ID is **not present** in `/user_credit_cards`, delete it.
+   * (Does **not** delete or rewrite everything.)
+*/
+
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-// To avoid deployment errors, do not call admin.initializeApp() in your code
+// Do NOT call admin.initializeApp()
 
 exports.writeUseCardsList = functions.region('us-central1').https.onCall(
   async (data, context) => {
@@ -10,181 +40,122 @@ exports.writeUseCardsList = functions.region('us-central1').https.onCall(
     const uid = context.auth.uid;
     const userRef = db.doc(`users/${uid}`);
 
-    // ---------- Helpers ----------
     const now = new Date();
-
-    const olderThanCalendarMonths = (d, months) => {
-      if (!(d instanceof Date)) return false;
-      const thresh = new Date(now);
-      // subtract N calendar months
-      thresh.setMonth(thresh.getMonth() - months);
-      return d.getTime() < thresh.getTime();
-    };
-
     const toJsDate = (ts) => {
-      // Accept Firestore Timestamp or FF-exported {_seconds}
       if (!ts) return null;
       if (typeof ts.toDate === 'function') return ts.toDate();
       if (ts._seconds != null) return new Date(ts._seconds * 1000);
       return null;
     };
-
     const monthDiffCalendar = (from, to) => {
-      // Integer calendar months difference (no partials)
-      // e.g., Aug 31 -> Sep 1 = 0; Mar 1 -> Aug 31 = 5 (if day-of-month hasn’t “passed” yet, subtract one)
       const y = to.getFullYear() - from.getFullYear();
       const m = to.getMonth() - from.getMonth();
       let diff = y * 12 + m;
       if (to.getDate() < from.getDate()) diff -= 1;
       return Math.max(0, diff);
     };
+    const olderThanCalendarMonths = (d, months) => {
+      if (!(d instanceof Date)) return false;
+      const thresh = new Date(now);
+      thresh.setMonth(thresh.getMonth() - months);
+      return d.getTime() < thresh.getTime();
+    };
 
-    // ---------- Step 1: Base filter (scope to caller) ----------
-    const baseSnap = await db.collection('user_credit_cards')
+    // Single-field query: userRef only (no composite index needed)
+    const allCardsSnap = await db.collection('user_credit_cards')
       .where('userRef', '==', userRef)
-      .where('isOpen', '==', true)
-      .where('totalBalance', '>', 0)
       .get();
 
-    // ---------- Step 2: Count after step 1 ----------
-    const countAfterStep1 = baseSnap.size;
-
-    // ---------- Step 3: Exclude CFA or AnnualFee ----------
-    const candidates = [];
-    baseSnap.forEach(doc => {
+    // Step 1 filter (basis for AZEO)
+    const step1 = [];
+    const allIds = new Set();
+    allCardsSnap.forEach(doc => {
+      allIds.add(doc.id);
       const c = doc.data() || {};
-      if (c.isCFA === true || c.isAnnualFee === true) return;
-      candidates.push({ id: doc.id, data: c });
+      if (c.isOpen === true && Number(c.totalBalance || 0) > 0) {
+        step1.push({ id: doc.id, data: c });
+      }
     });
 
-    // ---------- Step 5: AZEO based on step 1 count ----------
+    // Step 2 count (after step 1)
+    const countAfterStep1 = step1.length;
+
+    // Step 3 exclusions
+    const candidates = step1.filter(({ data }) => !(data.isCFA === true || data.isAnnualFee === true));
+
+    // Step 5 AZEO (based on step 1 count)
     const AZEO = countAfterStep1 === 0;
 
-    // ---------- Step 4 + 6: Compute useAge + flags, rank oldest -> newest ----------
+    // Steps 4 & 6: compute ages/flags + rank
     const items = candidates.map(({ id, data }) => {
       const dlu = toJsDate(data.dateLastUsed);
-      // Per spec: if missing dateLastUsed, consider useAge = 1 (month)
       let useAgeMonths, useAgeDays, useAgeMs;
-
       if (dlu) {
         useAgeMonths = monthDiffCalendar(dlu, now);
-        // For display convenience only (not used for the 5-month decision):
-        useAgeDays = Math.floor((now.getTime() - dlu.getTime()) / (24 * 60 * 60 * 1000));
-        useAgeMs = now.getTime() - dlu.getTime();
+        useAgeDays = Math.floor((now - dlu) / (24 * 60 * 60 * 1000));
+        useAgeMs = now - dlu;
       } else {
-        useAgeMonths = 1;
+        useAgeMonths = 1;   // per spec
         useAgeDays = 30;
         useAgeMs = 30 * 24 * 60 * 60 * 1000;
       }
-
-      const atAgeRisk = (!AZEO && dlu ? olderThanCalendarMonths(dlu, 5) : false);
-      const atAgeRiskOrAZEOorBoth = atAgeRisk; // AZEO already handled separately
-
-      return {
-        id,
-        useAgeMs,
-        useAgeDays,
-        useAgeMonths,
-        atAgeRiskOrAZEOorBoth,
-        raw: data,
-      };
+      const atAgeRiskOrAZEOorBoth = (!AZEO && dlu ? olderThanCalendarMonths(dlu, 5) : false);
+      return { id, raw: data, useAgeMonths, useAgeDays, useAgeMs, atAgeRiskOrAZEOorBoth };
     });
 
     items.sort((a, b) => b.useAgeMs - a.useAgeMs);
-    items.forEach((it, idx) => { it.rank = idx + 1; });
+    items.forEach((it, i) => { it.rank = i + 1; });
 
-    // ---------- Upsert results ----------
+    // Upserts
     const batch = db.batch();
+    const candidateIds = new Set(items.map(it => it.id));
 
     for (const it of items) {
       const src = it.raw;
       const targetRef = db.collection('user_use_cards_list').doc(it.id);
       const docRefCard = db.collection('user_credit_cards').doc(it.id);
 
-      batch.set(
-        targetRef,
-        {
-          // Flags
-          AZEO,
-          atAgeRiskOrAZEOorBoth: it.atAgeRiskOrAZEOorBoth,
+      batch.set(targetRef, {
+        AZEO,
+        atAgeRiskOrAZEOorBoth: it.atAgeRiskOrAZEOorBoth,
+        rank: it.rank,
+        useAgeMonths: it.useAgeMonths,
+        useAgeDays: it.useAgeDays,
 
-          // Rank/age
-          rank: it.rank,
-          useAgeMonths: it.useAgeMonths,
-          useAgeDays: it.useAgeDays,
+        lender: src.lender ?? null,
+        commercialName: src.commercialName ?? null,
+        creditLimit: src.creditLimit ?? null,
+        apr: src.apr ?? null,
+        totalBalance: src.totalBalance ?? null,
+        dayOfMonthDue: src.dayOfMonthDue ?? null,
+        minimumPayment: src.minimumPayment ?? null,
+        rewardType: src.rewardType ?? null,
+        isOpen: src.isOpen ?? null,
+        isCFA: src.isCFA ?? null,
+        isAnnualFee: src.isAnnualFee ?? null,
 
-          // Mirrors for UI
-          lender: src.lender ?? null,
-          commercialName: src.commercialName ?? null,
-          creditLimit: src.creditLimit ?? null,
-          apr: src.apr ?? null,
-          totalBalance: src.totalBalance ?? null,
-          dayOfMonthDue: src.dayOfMonthDue ?? null,
-          minimumPayment: src.minimumPayment ?? null,
-          rewardType: src.rewardType ?? null,
-          isOpen: src.isOpen ?? null,
-          isCFA: src.isCFA ?? null,
-          isAnnualFee: src.isAnnualFee ?? null,
+        dateLastUsed: src.dateLastUsed ?? null,
+        dateIssued: src.dateIssued ?? null,
 
-          // Dates (preserve if present)
-          dateLastUsed: src.dateLastUsed ?? null,
-          dateIssued: src.dateIssued ?? null,
-
-          // Refs
-          userRef,
-          DocRefCard: docRefCard,
-
-          // Bookkeeping
-          created_time: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
+        userRef,
+        DocRefCard: docRefCard,
+        created_time: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
     }
 
-    // ---------- Cleanup: delete only orphans ----------
-    // (Docs in /user_use_cards_list for this user that no longer exist in /user_credit_cards)
+    // Cleanup: delete only orphans (list docs for this user with no origin card at all)
     const existingListSnap = await db.collection('user_use_cards_list')
       .where('userRef', '==', userRef)
       .get();
 
-    const candidateIds = new Set(candidates.map(c => c.id));
-    const cardIdsAfterStep1 = new Set(); // just to check existence quickly
-    baseSnap.forEach(d => cardIdsAfterStep1.add(d.id));
-
     existingListSnap.forEach(doc => {
-      // Orphan = there is no origin card doc at all (regardless of filters)
-      if (!cardIdsAfterStep1.has(doc.id)) {
-        // We must still check the origin collection (what if card exists but was filtered out by step 1?)
-        // Fetch minimal doc existence:
-        // NOTE: avoid per-doc reads here if your dataset is large; if needed, prefetch all card ids for the user.
-        // Since we already scoped baseSnap (only step1), we’ll do a lightweight origin check:
-        // If not in step1 set, we still need to see if it exists in origin at all.
-        // Optimization: only delete if truly missing in origin collection.
-        // We'll trust a single doc.get() here for accuracy. If you need to avoid reads, maintain a cached list elsewhere.
-        // eslint-disable-next-line no-async-promise-executor
+      if (!allIds.has(doc.id)) {
+        batch.delete(doc.ref);
       }
     });
 
-    // Lightweight existence checks for orphans (batched sequentially to keep it simple)
-    for (const doc of existingListSnap.docs) {
-      if (!cardIdsAfterStep1.has(doc.id)) {
-        const originExists = await db.collection('user_credit_cards').doc(doc.id).get();
-        if (!originExists.exists) {
-          batch.delete(doc.ref);
-        }
-      }
-    }
-
     await batch.commit();
 
-    return {
-      ok: true,
-      stats: {
-        step1_count: countAfterStep1,
-        written: items.length,
-        AZEO,
-        cleaned_orphans_checked: existingListSnap.size,
-      },
-    };
+    return { ok: true, stats: { step1_count: countAfterStep1, written: items.length, AZEO, cleaned_orphans_checked: existingListSnap.size } };
   }
 );
