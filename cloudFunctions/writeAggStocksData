@@ -28,6 +28,8 @@ function num(v, d = 0) {
 
 function shallowEqualPayload(a, b) {
   if (!a || !b) return false;
+  const aUserPath = a.user && typeof a.user.path === 'string' ? a.user.path : null;
+  const bUserPath = b.user && typeof b.user.path === 'string' ? b.user.path : null;
   return (
     a.amountAllowed === b.amountAllowed &&
     a.amountOwed === b.amountOwed &&
@@ -36,18 +38,16 @@ function shallowEqualPayload(a, b) {
     a.newest === b.newest &&
     a.oldest === b.oldest &&
     a.stockType === b.stockType &&
-    a.user?.__ref__ === b.user?.__ref__
+    aUserPath === bUserPath
   );
 }
 
-/** SAFETY: run query; return [] on any error so callers can proceed defensively */
 async function safeQuery(q) {
   try {
     const snap = await q.get();
     if (!snap || snap.empty) return [];
     return snap.docs.map(d => ({ id: d.id, ...d.data() }));
   } catch (e) {
-    // Optional: log once per type if you want
     console.warn('safeQuery error:', e?.message || e);
     return [];
   }
@@ -140,14 +140,11 @@ exports.writeAggStocksData = functions
     const actions = [];
 
     for (const cfg of STOCKS) {
-      // user-scoped query + type filters
       let q = db.collection(cfg.collection).where('userRef', '==', userRef);
       for (const w of (cfg.where || [])) q = q.where(w.f, w.op, w.v);
 
-      // SAFETY: never throws; [] if collection missing or any error
       const docs = await safeQuery(q);
 
-      // Aggregate
       let count = 0;
       let amountAllowed = 0;
       let amountOwed = 0;
@@ -159,7 +156,9 @@ exports.writeAggStocksData = functions
       for (const d of docs) {
         count += 1;
 
-        if (cfg.amountAllowedField) amountAllowed += num(d[cfg.amountAllowedField], 0);
+        if (cfg.amountAllowedField) {
+          amountAllowed += num(d[cfg.amountAllowedField], 0);
+        }
 
         if (cfg.amountOwedField) {
           const include = cfg.sumOwedOnlyIfUnpaid ? (d.isPaid !== true) : true;
@@ -181,7 +180,6 @@ exports.writeAggStocksData = functions
       const exists = existingSnap.exists;
 
       if (count === 0) {
-        // If origin empty/missing -> delete any prior aggregate
         if (exists) {
           await docRef.delete();
           actions.push({ id: cfg.id, action: 'deleted-empty' });
@@ -196,10 +194,10 @@ exports.writeAggStocksData = functions
         amountOwed,
         averageAge,
         count,
-        newest: newestMs, // always written
+        newest: newestMs,
         oldest: oldestMs,
         stockType: cfg.stockType,
-        user: { __ref__: userRef.path },
+        user: userRef, // <-- write as a DocumentReference (fix)
       };
 
       const shouldWrite = !exists || !shallowEqualPayload(payload, existingSnap.data());
