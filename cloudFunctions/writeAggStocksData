@@ -17,7 +17,7 @@ function monthsFromWholeDays(nowMs, thenMs) {
   const diffMs = Math.max(0, nowMs - thenMs);
   const wholeDays = Math.floor(diffMs / MS_PER_DAY);
   const months = wholeDays / AVG_DAYS_PER_MONTH;
-  return Math.round(months * 10) / 10; // 1 decimal
+  return Math.round(months * 10) / 10;
 }
 function num(v, d = 0) {
   const n = Number(v);
@@ -60,17 +60,17 @@ const STOCKS = [
 ];
 
 exports.writeAggStocksData = functions.region('us-central1').https.onCall(async (data, context) => {
-  if (!context.auth?.uid) return; // 204
+  if (!context.auth?.uid) return; // no auth
 
   const db = admin.firestore();
   const uid = context.auth.uid;
   const userRef = db.doc(`users/${uid}`);
-  const aggCol = db.collection('user_stocks_aggregate'); // 👈 top-level
+  const aggCol = db.collection('user_stocks_aggregate'); // top-level
   const nowMs = Date.now();
   const actions = [];
 
   for (const cfg of STOCKS) {
-    // Top-level query filtered by userRef
+    // query top-level collection filtered by userRef
     let q = db.collection(cfg.collection).where('userRef', '==', userRef);
     for (const w of (cfg.where || [])) q = q.where(w.f, w.op, w.v);
 
@@ -97,8 +97,8 @@ exports.writeAggStocksData = functions.region('us-central1').https.onCall(async 
 
     const averageAge = ageN ? Math.round((ageSumMonths / ageN) * 10) / 10 : 0;
 
-    // Top-level aggregate doc id per user+type
-    const docId = `${uid}__${cfg.id}`;
+    // 👇 new ID format
+    const docId = `${cfg.id}__${uid}`;
     const docRef = aggCol.doc(docId);
     const existingSnap = await docRef.get();
     const exists = existingSnap.exists;
@@ -118,10 +118,10 @@ exports.writeAggStocksData = functions.region('us-central1').https.onCall(async 
       amountOwed,
       averageAge,
       count,
-      newest: newestMs, // always present
+      newest: newestMs,
       oldest: oldestMs,
       stockType: cfg.stockType,
-      user: userRef, // DocumentReference
+      user: userRef,
     };
 
     const shouldWrite = !exists || !shallowEqualPayload(payload, existingSnap.data());
