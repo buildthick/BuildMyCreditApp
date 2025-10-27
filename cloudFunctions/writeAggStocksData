@@ -1,6 +1,6 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-// Do NOT call admin.initializeApp().
+// Do NOT call admin.initializeApp() here.
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 const AVG_DAYS_PER_MONTH = 30.4375;
@@ -18,7 +18,7 @@ function monthsFromWholeDays(nowMs, thenMs) {
   const diffMs = Math.max(0, nowMs - thenMs);
   const wholeDays = Math.floor(diffMs / MS_PER_DAY);
   const months = wholeDays / AVG_DAYS_PER_MONTH;
-  return Math.round(months * 10) / 10; // 1 decimal
+  return Math.round(months * 10) / 10;
 }
 
 function num(v, d = 0) {
@@ -136,10 +136,10 @@ exports.writeAggStocksData = functions
     const userRef = db.doc(`users/${uid}`);
     const aggCol = db.collection('users').doc(uid).collection('user_stocks_aggregate');
     const nowMs = Date.now();
-
     const actions = [];
 
     for (const cfg of STOCKS) {
+      // 👇 Top-level collection query
       let q = db.collection(cfg.collection).where('userRef', '==', userRef);
       for (const w of (cfg.where || [])) q = q.where(w.f, w.op, w.v);
 
@@ -155,20 +155,15 @@ exports.writeAggStocksData = functions
 
       for (const d of docs) {
         count += 1;
-
-        if (cfg.amountAllowedField) {
-          amountAllowed += num(d[cfg.amountAllowedField], 0);
-        }
-
+        if (cfg.amountAllowedField) amountAllowed += num(d[cfg.amountAllowedField], 0);
         if (cfg.amountOwedField) {
           const include = cfg.sumOwedOnlyIfUnpaid ? (d.isPaid !== true) : true;
           if (include) amountOwed += num(d[cfg.amountOwedField], 0);
         }
-
         const dMs = toMillis(d[cfg.dateField]);
         if (dMs != null) {
-          newestMs = (newestMs == null) ? dMs : Math.max(newestMs, dMs);
-          oldestMs = (oldestMs == null) ? dMs : Math.min(oldestMs, dMs);
+          newestMs = newestMs == null ? dMs : Math.max(newestMs, dMs);
+          oldestMs = oldestMs == null ? dMs : Math.min(oldestMs, dMs);
           ageSumMonths += monthsFromWholeDays(nowMs, dMs);
           ageN += 1;
         }
@@ -197,7 +192,7 @@ exports.writeAggStocksData = functions
         newest: newestMs,
         oldest: oldestMs,
         stockType: cfg.stockType,
-        user: userRef, // <-- write as a DocumentReference (fix)
+        user: userRef, // true DocumentReference
       };
 
       const shouldWrite = !exists || !shallowEqualPayload(payload, existingSnap.data());
