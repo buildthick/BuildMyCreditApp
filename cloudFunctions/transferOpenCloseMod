@@ -1,0 +1,75 @@
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+exports.transferOpenCloseMod = functions.region('us-central1').https.onCall(
+  async (data, context) => {
+    if (!context.auth || !context.auth.uid) {
+      // Not signed in — fail silently per your template, or return an error if you prefer
+      return;
+    }
+
+    const uid = context.auth.uid;
+    const db = admin.firestore();
+
+    // Read all general adjustment docs
+    const srcSnap = await db.collection('openAndCloseAdjustments').get();
+    if (srcSnap.empty) {
+      return { written: 0 };
+    }
+
+    // Batch writes (<=500 per batch)
+    let batch = db.batch();
+    let opCount = 0;
+    const now = admin.firestore.FieldValue.serverTimestamp();
+
+    for (const doc of srcSnap.docs) {
+      const src = doc.data() || {};
+
+      // Build target payload, avoiding undefineds (Firestore rejects undefined)
+      const target = {};
+      // Copy all shared known fields if present
+      if (src.Action_Type !== undefined) target.Action_Type = src.Action_Type;
+      if (src.Sub_Action_Type !== undefined) target.Sub_Action_Type = src.Sub_Action_Type;
+      if (src.Type !== undefined) target.Type = src.Type;
+      if (src.Unique_Name !== undefined) target.Unique_Name = src.Unique_Name;
+      if (src.modType !== undefined) target.modType = src.modType;
+      if (src.Default_Interval !== undefined) target.Default_Interval = src.Default_Interval;
+      if (src.Default_Interval_Unit !== undefined) target.Default_Interval_Unit = src.Default_Interval_Unit;
+      if (src.Default_Value !== undefined) target.Default_Value = src.Default_Value;
+
+      // Map Default* -> User*
+      if (src.Default_Value !== undefined) target.User_Value = src.Default_Value;
+      if (src.Default_Interval !== undefined) target.User_Interval = src.Default_Interval;
+      if (src.Default_Interval_Unit !== undefined) target.User_Interval_Unit = src.Default_Interval_Unit;
+
+      // Attach userRef and bookkeeping
+      target.userRef = db.doc(`users/${uid}`);
+      target.updated_time = now;
+      if (data && data.addCreatedTime === true) {
+        // Optional: allow caller to set created_time when first generated
+        target.created_time = now;
+      }
+
+      // Idempotent per user+source: avoid collisions across users
+      const destId = `${uid}_${doc.id}`;
+      const destRef = db.collection('user_openAndCloseAdjustments').doc(destId);
+
+      batch.set(destRef, target, { merge: true });
+      opCount++;
+
+      // Commit every 450 ops to stay under limits
+      if (opCount % 450 === 0) {
+        await batch.commit();
+        batch = db.batch();
+      }
+    }
+
+    // Final commit
+    if (opCount % 450 !== 0) {
+      await batch.commit();
+    }
+
+    return { written: opCount };
+  }
+);
