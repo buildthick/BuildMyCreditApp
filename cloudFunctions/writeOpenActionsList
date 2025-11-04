@@ -18,10 +18,9 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     const ceil = Math.ceil;
     const min = Math.min;
 
-    // normalize strings for label matching
     const norm = (s) => (s || '').toString().trim().toLowerCase()
       .replace(/\s+/g, ' ')
-      .replace(/[-_]/g, ' '); // light normalization
+      .replace(/[-_]/g, ' ');
 
     const nowInTZ = (tz="America/New_York") => {
       const fmt = new Intl.DateTimeFormat('en-US', {
@@ -61,9 +60,8 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     const adjSnap = await db.collection('user_openAndCloseAdjustments')
       .where('userRef', '==', userRef).get();
 
-    // Build quick maps for values + time rows
-    const valMap = new Map(); // normalized Unique_Name -> User_Value/Value
-    const timeMap = new Map(); // normalized Unique_Name -> User_Value/Value (Type == Time)
+    const valMap = new Map();
+    const timeMap = new Map();
 
     adjSnap.forEach(doc => {
       const d = doc.data();
@@ -75,55 +73,56 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
       else valMap.set(n, nz(v, 0));
     });
 
-    // Value getters (case-insensitive)
-    const getVal = (label) => valMap.get(norm(label)) ?? 0;
+    const getVal  = (label) => valMap.get(norm(label))  ?? 0;
     const getTime = (label) => timeMap.get(norm(label)) ?? 0;
 
-    // expects labels in any case/spelling variants
-    const currentPerLateMultiplier = getVal('current accounts / lates')
-      || getVal('current accounts / lates + collections')
-      || getVal('current accounts by lates')
-      || 0;
+    const currentPerLateMultiplier =
+      getVal('current accounts / lates') ||
+      getVal('current accounts / lates + collections') ||
+      getVal('current accounts by lates') || 0;
 
-    const pctRevolvingMin = getVal('revolving % of total') || getVal('revolving percent of total') || 0;
+    const pctRevolvingMin =
+      getVal('revolving % of total') || getVal('revolving percent of total') || 0;
+
     const maxLoansAllowed = getVal('max loans allowed') || null;
 
-    const yearlyOpensMax = getTime('yearly opens allowable') || getTime('yearly allowable opens') || 0;
-    const halfYearRequestsMax = getTime('half yearly requests allowable') || getTime('half yearly allowable requests') || 0;
+    const yearlyOpensMax =
+      getTime('yearly opens allowable') || getTime('yearly allowable opens') || 0;
+
+    const halfYearRequestsMax =
+      getTime('half yearly requests allowable') || getTime('half yearly allowable requests') || 0;
+
     const minMonthsBetweenOpens = getTime('min interval between opens in ltm') || 0;
     const minMonthsBetweenRequests = getTime('min interval between requests in ltm') || 0;
 
-    // CHA targets
-    const chaSnap = await db.collection('credit_high_achiever_account_numbers')
-      .where('userRef', '==', userRef).get();
+    // CHA targets (GLOBAL — no user filter)
+    const chaSnap = await db.collection('credit_high_achiever_account_numbers').get();
     let chaSum = 0;
-    chaSnap.forEach(doc => {
-      chaSum += nz(doc.data().Value ?? doc.data().value, 0);
-    });
+    chaSnap.forEach(doc => { chaSum += nz(doc.data().Value ?? doc.data().value, 0); });
 
-    // Conso (single source for counts/lates/collections/opens/requests)
+    // Conso (single source)
     const consoSnap = await db.collection('user_stocks_conso')
       .where('userRef', '==', userRef).get();
 
+    // One "now" for entirety of function
     const nowNY = nowInTZ('America/New_York');
     const d365 = new Date(nowNY); d365.setDate(d365.getDate() - 365);
     const d180 = new Date(nowNY); d180.setDate(d180.getDate() - 180);
 
-    const isCard = (d) => (d.stock || d.stockType) === 'user_credit_cards';
-    const isLoan = (d) => (d.stock || d.stockType) === 'user_loans';
-    const isHardPull = (d) => (d.stock || d.stockType) === 'user_hard_pulls';
+    const stockName = (d) => (d.stock || d.stockType || '').toString();
+
+    const isCard = (d) => stockName(d) === 'user_credit_cards';
+    const isLoan = (d) => stockName(d) === 'user_loans';
+    const isHardPull = (d) => stockName(d) === 'user_hard_pulls';
     const isAccountRow = (d) => isCard(d) || isLoan(d);
-    const isLateRow = (d) =>
-      (d.stock || d.stockType || d.category) === 'late' || d.isLate === true || (d.kind === 'late');
-    const isCollectionRow = (d) =>
-      (d.stock || d.stockType || d.category) === 'collection' || d.isCollection === true || (d.kind === 'collection');
+
+    // Your actual LOD names:
+    const isLateRow = (d) => stockName(d).endsWith('_late_payments');
+    const isCollectionRow = (d) => stockName(d) === 'user_collections_3rd_party';
 
     // ---------- parse conso ----------
-    // Step 2: "current means exists now": count by isOpen ONLY
+    // Step 2: "current means exists now": isOpen ONLY
     let openCards = 0, openLoans = 0;
-
-    // Financially-current counts (isOpen && isCurrent) — only used where needed by spec
-    let finCurrentCards = 0, finCurrentLoans = 0;
 
     // Lates/Collections (no dedupe)
     let countLates = 0, countCollections = 0;
@@ -141,18 +140,11 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
       const d = doc.data();
 
       if (isAccountRow(d)) {
-        // exists now
         if (d.isOpen === true) {
           if (isCard(d)) openCards++;
           else if (isLoan(d)) openLoans++;
         }
-        // financially current (paid on time)
-        if (d.isOpen === true && d.isCurrent === true) {
-          if (isCard(d)) finCurrentCards++;
-          else if (isLoan(d)) finCurrentLoans++;
-        }
 
-        // opens timeline
         const od = asDate(d.DOFRecord ?? d.dateOpened ?? d.date_issued ?? d.Date_issued);
         if (od) {
           if (od >= d365) opensIn365++;
@@ -180,9 +172,7 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     });
 
     // ---------- Step 1: Goal ----------
-    const totalLatesAndCollections = countLates + countCollections; // LOD = rows
-    // Path A: per spec it's User_Value("Current accounts / lates") * (lates + collections)
-    // (Note: you clarified meaning of 'current' as financially current, but this multiplier is a scalar.)
+    const totalLatesAndCollections = countLates + countCollections;
     const pathA = nz(currentPerLateMultiplier, 0) * totalLatesAndCollections;
     const pathB = chaSum;
     const goalTotal = Math.max(nz(pathA,0), nz(pathB,0));
@@ -192,6 +182,7 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
 
     // ---------- Step 3: Needed ----------
     const neededTotal = Math.max(0, goalTotal - currentOpenTotal);
+    const isDone = (neededTotal === 0);
 
     // ---------- Step 4: Allocation ----------
     let cardsToOpen = 0;
@@ -206,7 +197,7 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
       cardsToOpen = Math.min(neededTotal, minCards);
       loansToOpen = Math.min(Math.max(neededTotal - cardsToOpen, 0), loanCap);
       const shortfall = neededTotal - (cardsToOpen + loansToOpen);
-      if (shortfall > 0) cardsToOpen += shortfall; // guarantee total by pushing to cards
+      if (shortfall > 0) cardsToOpen += shortfall; // guarantee total
     } else {
       const minCards = ceil((nz(pctRevolvingMin,0) / 100) * neededTotal);
       cardsToOpen = Math.min(neededTotal, minCards);
@@ -222,23 +213,24 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     const nextByOpenInterval = mostRecentOpenDate ? addMonthsFractional(mostRecentOpenDate, nz(minMonthsBetweenOpens,0)) : new Date(0);
     const nextByReqInterval  = mostRecentReqDate  ? addMonthsFractional(mostRecentReqDate,  nz(minMonthsBetweenRequests,0)) : new Date(0);
 
-    const nowNY = nowInTZ('America/New_York');
     const intervalsSatisfied = (nowNY >= nextByOpenInterval) && (nowNY >= nextByReqInterval);
 
     const capsBlocked = (yearlyHeadroom <= 0) || (halfYearHeadroom <= 0);
     const intervalsBlocked = !intervalsSatisfied;
 
     let blockReason = null;
-    if (capsBlocked) {
-      if (yearlyHeadroom <= 0) blockReason = 'yearly_cap_reached';
-      if (halfYearHeadroom <= 0) blockReason = blockReason ? `${blockReason}|halfyear_requests_cap_reached` : 'halfyear_requests_cap_reached';
-    }
-    if (intervalsBlocked) {
-      blockReason = blockReason ? `${blockReason}|interval_not_satisfied` : 'interval_not_satisfied';
+    if (!isDone) {
+      if (capsBlocked) {
+        if (yearlyHeadroom <= 0) blockReason = 'yearly_cap_reached';
+        if (halfYearHeadroom <= 0) blockReason = blockReason ? `${blockReason}|halfyear_requests_cap_reached` : 'halfyear_requests_cap_reached';
+      }
+      if (intervalsBlocked) {
+        blockReason = blockReason ? `${blockReason}|interval_not_satisfied` : 'interval_not_satisfied';
+      }
     }
 
     let slotsNow = 0;
-    if (!capsBlocked && !intervalsBlocked && allocHeadroom > 0) {
+    if (!isDone && !capsBlocked && !intervalsBlocked && allocHeadroom > 0) {
       if (nz(minMonthsBetweenOpens,0) === 0 && nz(minMonthsBetweenRequests,0) === 0) {
         slotsNow = min(allocHeadroom, yearlyHeadroom, halfYearHeadroom);
       } else {
@@ -247,7 +239,7 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     }
 
     let nextEligibleDate = null;
-    if (slotsNow === 0) {
+    if (!isDone && slotsNow === 0) {
       const candidates = [nextByOpenInterval, nextByReqInterval];
       if (yearlyHeadroom <= 0) { const d = new Date(nowNY); d.setDate(d.getDate()+1); candidates.push(d); }
       if (halfYearHeadroom <= 0) { const d = new Date(nowNY); d.setDate(d.getDate()+1); candidates.push(d); }
@@ -289,12 +281,12 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     const out = {
       userRef,
       created_time: admin.firestore.Timestamp.now(),
-      status: (slotsNow > 0) ? 'proposed' : (neededTotal === 0 ? 'done' : 'blocked'),
+      status: (slotsNow > 0) ? 'proposed' : (isDone ? 'done' : 'blocked'),
       proposed: {
         can_open_now: slotsNow > 0,
         count_now: slotsNow,
         sequence_now: sequence,
-        next_eligible_date: nextEligibleDate ? toTs(nextEligibleDate) : null,
+        next_eligible_date: isDone ? null : (nextEligibleDate ? toTs(nextEligibleDate) : null),
         cadence_months: {
           opens_min_interval: nz(minMonthsBetweenOpens,0),
           requests_min_interval: nz(minMonthsBetweenRequests,0)
@@ -319,15 +311,18 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
         halfyear_requests_max: nz(halfYearRequestsMax,0),
         min_months_between_opens: nz(minMonthsBetweenOpens,0),
         min_months_between_requests: nz(minMonthsBetweenRequests,0),
-        is_blocked_caps: !!((yearlyHeadroom <= 0) || (halfYearHeadroom <= 0)),
-        is_blocked_intervals: !intervalsSatisfied,
-        block_reason: (slotsNow > 0 || neededTotal === 0) ? null :
-                      ((yearlyHeadroom <= 0 || halfYearHeadroom <= 0) && !intervalsSatisfied)
-                        ? 'caps_and_intervals'
-                        : ((yearlyHeadroom <= 0 || halfYearHeadroom <= 0) ? 'caps' : 'intervals')
+        is_blocked_caps: !isDone && !!((yearlyHeadroom <= 0) || (halfYearHeadroom <= 0)),
+        is_blocked_intervals: !isDone && ((nz(minMonthsBetweenOpens,0) > 0 || nz(minMonthsBetweenRequests,0) > 0) ? (nextEligibleDate && nowNY < nextEligibleDate) : false),
+        block_reason: (slotsNow > 0 || isDone) ? null : ( // only when truly blocked
+          ((yearlyHeadroom <= 0 || halfYearHeadroom <= 0) && (nowNY < nextByOpenInterval || nowNY < nextByReqInterval))
+            ? 'caps_and_intervals'
+            : ((yearlyHeadroom <= 0 || halfYearHeadroom <= 0)
+                ? 'caps'
+                : 'intervals')
+        )
       },
       selection_protocol: 'alternate_by_most_recent_type',
-      notes: 'User selects specific products from /user_card_recommendations; a separate CF writes origin docs post-approval.'
+      notes: 'User picks products from /user_card_recommendations; a separate CF writes origin docs post-approval.'
     };
 
     const docRef = await db.collection('user_open_actions_list').add(out);
