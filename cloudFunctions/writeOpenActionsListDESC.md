@@ -1,215 +1,255 @@
-# Open Actions Engine — Description
+# Cloud Function: `writeOpenActionsList`
 
-## Purpose
+### Overview
 
-Compute how many new **accounts** (cards/loans) you should open, **when** you’re allowed to open them (caps + intervals), and **what type(s)** to open **now**. Output a single “rule” doc to `/user_open_actions_list` that the UI uses to let the user pick specific products from `/user_card_recommendations`.
-
----
-
-## Data sources (all top-level, filtered by `userRef`)
-
-* `users/{uid}`:
-
-  * `wantsToAllowLoans` (bool)
-  * `imposeMaxLoanNumber` (bool)
-* `user_openAndCloseAdjustments`:
-
-  * `User_Value("Current accounts / lates")`
-  * `User_Value("Revolving % of total")` (cards minimum share as a percent)
-  * `User_Value("Max loans allowed")`
-  * `Type == "Time"` rows:
-
-    * `Yearly opens allowable`
-    * `Half-yearly requests allowable`
-    * `Min interval between opens in LTM` (months, may be fractional)
-    * `Min interval between requests in LTM` (months, may be fractional)
-* `credit_high_achiever_account_numbers`: sum of `Value` across Cards + Loans
-* `user_stocks_conso`:
-
-  * Identify **cards** (`stock == "user_credit_cards"`) and **loans** (`stock == "user_loans"`)
-  * “Current/open” = `isOpen == true` **AND** `isCurrent == true`
-  * Open date = `DOFRecord`
-  * Lates and collections rows (count them as rows; **no dedupe**)
-* `user_hard_pulls`:
-
-  * Request date = `DOFRecord`
-
-All “today” calculations use **America/New_York** time.
+This callable Cloud Function generates a record in the top-level collection `/user_open_actions_list`.
+It determines how many **new credit accounts** (cards or loans) a user should open during the current plan cycle, based on target goals, allocation rules, timing constraints, and user settings.
 
 ---
 
-## Step 1 — Goal (total accounts to open)
+## 1. Purpose
 
-Compute two candidates and take the max:
+The function runs whenever a user triggers an update or monthly recomputation.
+It produces a proposed “open actions” plan for that user, storing:
 
-* **Path A:** `User_Value("Current accounts / lates") × (count_lates + count_collections)` from `user_stocks_conso`
-* **Path B:** `sum(Value)` across `credit_high_achiever_account_numbers`
-  → `goal_total = max(Path A, Path B)`
+* **Goal totals** (how many total accounts are needed)
+* **Allocation** between cards and loans
+* **Timing and eligibility** (caps and intervals)
+* **Next eligible date** (if blocked)
+* **Execution sequence** (order of openings)
 
-> Lates/collections are counted at the level of each row (no deduping by account).
-
----
-
-## Step 2 — Current value (what you already have)
-
-From `user_stocks_conso`:
-
-* `open_cards = count(cards where isOpen && isCurrent)`
-* `open_loans = count(loans where isOpen && isCurrent)`
-* `current_open_total = open_cards + open_loans`
-
-Include CFA and AF cards; other CFs may remove them later.
+It’s the authoritative source for how the app decides when and what to open next.
 
 ---
 
-## Step 3 — Needed total
+## 2. Input Sources
 
-`needed_total = max(0, goal_total - current_open_total)`
-
----
-
-## Step 4 — Allocation (how many cards vs loans)
-
-Let `revPctMinCards = User_Value("Revolving % of total")`.
-
-Case logic:
-
-1. `wantsToAllowLoans == false`
-
-   * `cards_to_open = needed_total`, `loans_to_open = 0`
-
-2. `wantsToAllowLoans == true && imposeMaxLoanNumber == true`
-
-   * `loan_cap = max(0, User_Value("Max loans allowed") - open_loans)`
-   * `min_cards = ceil(revPctMinCards/100 × needed_total)`
-   * Start: `cards_to_open = min(needed_total, min_cards)`
-   * `loans_to_open = min(needed_total - cards_to_open, loan_cap)`
-   * If `cards_to_open + loans_to_open < needed_total`, **push the shortfall to cards** (guarantee total).
-
-3. `wantsToAllowLoans == true && imposeMaxLoanNumber == false`
-
-   * `cards_to_open = ceil(revPctMinCards/100 × needed_total)`
-   * `loans_to_open = needed_total - cards_to_open`
-
-`alloc_headroom = cards_to_open + loans_to_open` (how many you still need overall).
+| Source Collection                           | Purpose                                                                                                                                                |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/users/{uid}`                              | Reads user flags `wantsToAllowLoans`, `imposeMaxLoanNumber`                                                                                            |
+| `/user_openAndCloseAdjustments`             | Provides tuning knobs like “Revolving % of total,” “Max loans allowed,” and timing parameters (“Yearly opens allowable,” “Min interval between opens”) |
+| `/credit_high_achiever_account_numbers`     | Global reference goals for credit mix; used for CHA path of target calculation                                                                         |
+| `/user_stocks_conso`                        | Main data source for current account counts, lates, collections, open dates, and hard pulls                                                            |
+| `/users/{uid}/plan_meta/open_actions_epoch` | Baseline doc created on first run; stores `baseline_open_loans` for applying future-loan caps correctly                                                |
 
 ---
 
-## Step 5 — Timing gates (caps + intervals)
+## 3. Logic Flow
 
-From `user_stocks_conso` and `user_hard_pulls`:
+### Step 1. **Compute Goal**
 
-* `opens_in_365 = count(account DOFRecord in last 365 days)`
-* `requests_in_180 = count(hard-pull DOFRecord in last 180 days)`
-* `most_recent_open` = latest account DOFRecord (break ties by later time; if exact tie, prefer **card**)
-* `most_recent_open.type` = card/loan by its `stock`
-* `most_recent_request` = latest hard-pull DOFRecord
+Determine how many total accounts the user *should* have.
 
-From `user_openAndCloseAdjustments (Type="Time")`:
+Two possible paths:
 
-* `yearly_cap = Yearly opens allowable`
-* `halfyear_cap = Half-yearly requests allowable`
-* `min_open_interval_months = Min interval between opens in LTM` (can be fractional)
-* `min_request_interval_months = Min interval between requests in LTM` (can be fractional)
+* **Path A:**
+  `User_Value("Current accounts / lates") × (number of late + collection rows)`
+  *(uses “financially current” accounts as multiplier)*
 
-### Gate order (fail fast; any fail blocks)
+* **Path B:**
+  Sum of all numeric `Value` fields from `/credit_high_achiever_account_numbers`.
 
-1. **Caps:** if `opens_in_365 ≥ yearly_cap` or `requests_in_180 ≥ halfyear_cap` → **blocked**
-2. **Intervals:** compute next permissible date from each interval:
-
-   * `next_open_ok = most_recent_open + min_open_interval_months`
-   * `next_request_ok = most_recent_request + min_request_interval_months`
-     If **now** (NY time) is before either → **blocked**
-
-> Fractional months are converted to calendar months + fractional days (~30.4375 × fraction).
-
-### How many can open **now** (`slots_now`)
-
-* If blocked or `alloc_headroom == 0` → `slots_now = 0`
-* Else if **both intervals == 0** →
-  `slots_now = min(alloc_headroom, yearly_cap headroom, halfyear_cap headroom)`
-  (Allows multiple same-day opens up to caps.)
-* Else (any interval > 0) →
-  `slots_now = min(1, alloc_headroom, yearly headroom, half-year headroom)`
-  (One at a time; cadence controlled by intervals.)
-
-If `slots_now == 0`, also compute a conservative `next_eligible_date = max(next_open_ok, next_request_ok, cap windows)`.
-
-**Assumption:** each open consumes **one** request (hard pull). Real multi-pull detection may lag by a monthly cycle; throttling addressed later.
+> **Goal total** = whichever is greater of Path A or Path B.
 
 ---
 
-## Step 6 — Type sequence for “now”
+### Step 2. **Compute Current State**
 
-Produce up to `slots_now` items (“card”/“loan”) in order:
+Count currently existing accounts (not “financially current” — just open).
 
-1. Start with the **opposite** of `most_recent_open.type` (to alternate).
+* Cards: all docs in `user_stocks_conso` where `isOpen == true` and `stockType == "user_credit_cards"`.
+* Loans: all docs where `isOpen == true` and `stockType == "user_loans"`.
 
-   * If that bucket is disallowed or has no allocation left, start with the other.
-2. Alternate thereafter: card → loan → card → …
-3. If a bucket runs out (e.g., loans capped), keep filling with **cards** to guarantee total.
+Also gather:
 
-Result: `sequence_now = ["card","loan", ...]` with length = `slots_now`.
+* Most recent open date and type (card vs. loan)
+* Number of opens in last 365 days
+* Number of requests (hard pulls) in last 180 days
+* Most recent request date
 
 ---
 
-## Output (one doc per run) — `/user_open_actions_list`
+### Step 3. **Calculate Needed Total**
 
-Minimal but debuggable payload:
+`neededTotal = goalTotal - currentOpenTotal`
+If result ≤ 0 → status = `done` (no further openings needed).
+
+---
+
+### Step 4. **Baseline & Future-Loan Cap**
+
+Before allocation, ensure the user has a fixed plan baseline:
+
+* Check for `users/{uid}/plan_meta/open_actions_epoch`.
+* If missing, create it with `baseline_open_loans = current openLoans`.
+* On all future runs, read and reuse this baseline (never overwritten).
+
+> **loansOpenedSinceStart = openLoans - baseline_open_loans**
+
+If `imposeMaxLoanNumber` is true, the **loan cap** applies only to *future* loans:
+
+```
+loanCapRemaining = max(0, maxLoansAllowed - loansOpenedSinceStart)
+```
+
+Existing loans at plan start do **not** count against this cap.
+
+---
+
+### Step 5. **Allocate Between Cards and Loans**
+
+Rules:
+
+1. If `wantsToAllowLoans == false`:
+   → all needed accounts become cards.
+
+2. If `imposeMaxLoanNumber == true`:
+
+   * Use `loanCapRemaining` from Step 4.
+   * Use `User_Value("Revolving % of total")` to determine minimum card share.
+   * Allocate remaining slots to loans, up to cap.
+
+3. Otherwise (loans allowed, no cap):
+
+   * Use `Revolving %` to determine card share, remainder to loans.
+
+If rounding shortfall occurs, extra slots go to cards to maintain total.
+
+---
+
+### Step 6. **Timing Constraints**
+
+From `/user_openAndCloseAdjustments` rows with `Type == "Time"`:
+
+* `Yearly opens allowable`
+* `Half-yearly requests allowable`
+* `Min interval between opens in LTM`
+* `Min interval between requests in LTM`
+
+Then, from `user_stocks_conso`:
+
+* Count opens in last 365 days
+* Count requests in last 180 days
+* Find most recent open/request timestamps
+
+Compute:
+
+* **Yearly headroom:** `yearlyMax - opensIn365`
+* **Half-year headroom:** `halfYearMax - requestsIn180`
+* **Intervals satisfied?** true if both recent actions are older than the min interval values.
+
+---
+
+### Step 7. **Determine Eligibility**
+
+If:
+
+* both caps have headroom, **and**
+* both intervals are satisfied, **and**
+* `neededTotal > 0`
+
+→ user **can open now**.
+
+If interval(s) still running, CF sets:
+
+* `can_open_now = false`
+* `next_eligible_date = later of (nextByOpenInterval, nextByReqInterval)`
+
+If caps exceeded, block reason = `"yearly_cap_reached"` or `"halfyear_requests_cap_reached"`.
+If both exceeded and intervals pending, reason = `"caps_and_intervals"`.
+
+---
+
+### Step 8. **Generate Sequence**
+
+If user can open now, generate a `sequence_now` array of account types:
+
+* Start by alternating opposite of the **most recent type opened**.
+* If that type is capped or unavailable, fallback to remaining type.
+* If multiple opens allowed immediately (interval = 0), fill up to allowed slots; otherwise only 1 per run.
+
+Example:
+
+```json
+"sequence_now": ["card", "loan", "card"]
+```
+
+---
+
+### Step 9. **Write Output**
+
+A new document is created in the top-level collection:
+
+```
+/user_open_actions_list
+```
+
+Key fields:
 
 ```json
 {
-  "userRef": <DocRef>,
-  "created_time": <Timestamp>,
-  "status": "proposed" | "blocked" | "done",
-
+  "userRef": <DocumentReference>,
+  "status": "proposed" | "done" | "blocked",
   "proposed": {
-    "can_open_now": <bool>,
-    "count_now": <number>,
-    "sequence_now": ["card","loan", ...],
-    "next_eligible_date": <Timestamp|null>,
+    "can_open_now": true,
+    "count_now": 1,
+    "sequence_now": ["card"],
+    "next_eligible_date": null,
     "cadence_months": {
-      "opens_min_interval": <number>,
-      "requests_min_interval": <number>
+      "opens_min_interval": 2,
+      "requests_min_interval": 1
     }
   },
-
   "allocation": {
-    "goal_total": <number>,
-    "current_open_cards": <number>,
-    "current_open_loans": <number>,
-    "needed_total": <number>,
-    "revPctMinCards": <number>,
-    "loan_cap": <number|null>,
-    "cards_to_open": <number>,
-    "loans_to_open": <number>
+    "goal_total": 16,
+    "current_open_cards": 3,
+    "current_open_loans": 2,
+    "needed_total": 11,
+    "revPctMinCards": 70,
+    "loan_cap_remaining": 1,
+    "cards_to_open": 10,
+    "loans_to_open": 1
   },
-
   "timing": {
-    "opens_in_365": <number>,
-    "requests_in_180": <number>,
-    "most_recent_open": <Timestamp|null>,
-    "most_recent_request": <Timestamp|null>,
-    "yearly_opens_max": <number>,
-    "halfyear_requests_max": <number>,
-    "min_months_between_opens": <number>,
-    "min_months_between_requests": <number>,
-    "is_blocked_caps": <bool>,
-    "is_blocked_intervals": <bool>,
-    "block_reason": "<string|null>"
+    "opens_in_365": 1,
+    "requests_in_180": 0,
+    "yearly_opens_max": 6,
+    "halfyear_requests_max": 3,
+    "is_blocked_caps": false,
+    "is_blocked_intervals": false
   },
-
-  "selection_protocol": "alternate_by_most_recent_type",
-  "notes": "User picks specific products from /user_card_recommendations; a separate CF writes origin docs post-approval."
+  "meta": {
+    "baseline_open_loans": 2
+  }
 }
 ```
 
 ---
 
-## Edge cases & conventions
+## 4. Behavior Summary
 
-* If `needed_total == 0`, set `count_now = 0`, `status = "done"`.
-* If `imposeMaxLoanNumber` binds hard, push unmet remainder to **cards** to guarantee total.
-* If `most_recent_open` is null (no history), start `sequence_now` with **card** unless loans are required by allocation and allowed.
-* Ties on `most_recent_open` at same millisecond → prefer **card** (as defined).
-* Time basis: **America/New_York** for all “today/now” and calendar-month math.
+| Condition                 | Outcome                                                   |
+| ------------------------- | --------------------------------------------------------- |
+| All constraints satisfied | Creates `status: "proposed"`, user can open now           |
+| NeededTotal = 0           | Creates `status: "done"` (no new accounts needed)         |
+| Interval or cap blocking  | Creates `status: "blocked"` and sets `next_eligible_date` |
+| First run ever            | Seeds `plan_meta/open_actions_epoch` with baseline loans  |
+| Subsequent runs           | Reuses epoch; baseline never overwritten                  |
+
+---
+
+## 5. Future Extensions
+
+* Add deterministic `period_key` (e.g., monthly) for easier rerun detection and versioning.
+* Extend sequence logic to respect product categories or credit-tier ranking.
+* Integrate logging of “block reasons” into a `/diagnostics` subcollection for UI transparency.
+
+---
+
+## 6. Notes
+
+* All timestamps use **New York time** to match FICO/credit-reporting cycles.
+* Fractional months are supported (e.g., 0.5 = two weeks).
+* CHA collection is treated as **global** (no `userRef` filter).
+* “Current” means *existing now*, not *financially current*, except in the multiplier calculation.
+* Loan cap only limits **future loans opened after plan start**.
