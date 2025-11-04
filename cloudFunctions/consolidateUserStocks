@@ -87,6 +87,21 @@ async function mapAccounts(collectionName, db, userDocRef) {
     const consoRef = db.collection('user_stocks_conso').doc(doc.id);
     const isCards = collectionName === 'user_credit_cards';
 
+    // --- NEW: isOpen handling (boolean, null, or missing) ---
+    let isOpenField;
+    let isOpenIsNullFlag;
+    let isOpenIsMissingFlag;
+    if (d.hasOwnProperty('isOpen')) {
+      if (d.isOpen === null) {
+        isOpenIsNullFlag = true;
+      } else if (typeof d.isOpen === 'boolean') {
+        isOpenField = d.isOpen;
+      }
+    } else {
+      isOpenIsMissingFlag = true;
+    }
+    // -------------------------------------------------------
+
     const flatData = clean({
       DOFRecord:   d.dateIssued,
       userRef:     d.userRef,
@@ -94,7 +109,10 @@ async function mapAccounts(collectionName, db, userDocRef) {
       subStock:    isCards ? 'Revolving' : 'Installment',
       lender:      d.lender,
       name:        d.commercialName,
-      isCurrent:   d.isCurrent,                 // undefined gets removed
+      isCurrent:   d.isCurrent,
+      isOpen:      isOpenField,
+      isOpenIsNull: isOpenIsNullFlag,
+      isOpenIsMissing: isOpenIsMissingFlag,
       isCFA:       d.isCFA,
       isAnnualFee: isCards ? d.isAnnualFee : undefined,
       creditLimit: isCards ? d.creditLimit : d.principalOriginal,
@@ -149,13 +167,30 @@ async function mapLates(collectionName, db, userDocRef) {
 
     const isCardsLate = collectionName === 'user_credit_cards_late_payments';
 
+    // --- NEW: isPaid handling (boolean, null, or missing) ---
+    let isPaidField;
+    let isPaidIsNullFlag;
+    let isPaidIsMissingFlag;
+    if (d.hasOwnProperty('isPaid')) {
+      if (d.isPaid === null) {
+        isPaidIsNullFlag = true;
+      } else if (typeof d.isPaid === 'boolean') {
+        isPaidField = d.isPaid;
+      }
+    } else {
+      isPaidIsMissingFlag = true;
+    }
+    // -------------------------------------------------------
+
     const flatData = clean({
       userRef:     d.userRef,
       stock:       collectionName,
       subStock:    isCardsLate ? 'Revolving' : 'Installment',
       lender:      refData.lender,
       name:        refData.commercialName,
-      isPaid:      d.isPaid,
+      isPaid:      isPaidField,
+      isPaidIsNull: isPaidIsNullFlag,
+      isPaidIsMissing: isPaidIsMissingFlag,
       DOFRecord:   d.DOFD,
       severity,
       amountsOwed: d.amount
@@ -184,13 +219,30 @@ async function mapCollections(collectionName, db, userDocRef) {
     const d = doc.data();
     const consoRef = db.collection('user_stocks_conso').doc(doc.id);
 
+    // --- NEW: isPaid handling (boolean, null, or missing) ---
+    let isPaidField;
+    let isPaidIsNullFlag;
+    let isPaidIsMissingFlag;
+    if (d.hasOwnProperty('isPaid')) {
+      if (d.isPaid === null) {
+        isPaidIsNullFlag = true;
+      } else if (typeof d.isPaid === 'boolean') {
+        isPaidField = d.isPaid;
+      }
+    } else {
+      isPaidIsMissingFlag = true;
+    }
+    // -------------------------------------------------------
+
     const flatData = clean({
       userRef:     d.userRef,
       stock:       collectionName,
       subStock:    'Collection',
       lender:      d.originalProvider,
       name:        d.collectionsAgency,
-      isPaid:      d.isPaid,
+      isPaid:      isPaidField,
+      isPaidIsNull: isPaidIsNullFlag,
+      isPaidIsMissing: isPaidIsMissingFlag,
       DOFRecord:   d.DOFD,
       severity:    'Collection',
       amountsOwed: d.amount
