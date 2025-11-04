@@ -1,6 +1,6 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-// Do NOT call admin.initializeApp() in your FF environment.
+// Do NOT call admin.initializeApp() in your FF env
 const db = admin.firestore();
 db.settings({ ignoreUndefinedProperties: true });
 
@@ -15,9 +15,13 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     const asBool = (v, d=false) => (typeof v === 'boolean' ? v : d);
     const isTs = (t) => t && typeof t.toDate === 'function';
     const toTs = (d) => admin.firestore.Timestamp.fromDate(d);
-    const trunc = (n) => Math.max(0, Math.floor(n));
     const ceil = Math.ceil;
     const min = Math.min;
+
+    // normalize strings for label matching
+    const norm = (s) => (s || '').toString().trim().toLowerCase()
+      .replace(/\s+/g, ' ')
+      .replace(/[-_]/g, ' '); // light normalization
 
     const nowInTZ = (tz="America/New_York") => {
       const fmt = new Intl.DateTimeFormat('en-US', {
@@ -27,26 +31,17 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
         hour12: false
       });
       const parts = Object.fromEntries(fmt.formatToParts(new Date()).map(p => [p.type, p.value]));
-      // parts: {year:'2025', month:'11', day:'04', hour:'13', minute:'05', second:'22'}
       return new Date(`${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`);
     };
+
     const addMonthsFractional = (date, months) => {
       const d = new Date(date.getTime());
       const whole = Math.trunc(months);
       const frac = months - whole;
-      // add whole calendar months
-      if (whole !== 0) {
-        const m = d.getMonth() + whole;
-        d.setMonth(m);
-      }
-      // add fractional part as days (average month length)
-      if (frac !== 0) {
-        const days = frac * 30.4375; // acceptable per spec
-        d.setDate(d.getDate() + days);
-      }
+      if (whole !== 0) d.setMonth(d.getMonth() + whole);
+      if (frac !== 0) d.setDate(d.getDate() + frac * 30.4375);
       return d;
     };
-    const daysAgo = (d1, d0) => (d1 - d0) / (1000 * 60 * 60 * 24);
 
     const asDate = (maybeTsOrDate) => {
       if (!maybeTsOrDate) return null;
@@ -57,132 +52,142 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     };
 
     // ---------- load knobs ----------
-    // Users/{uid}
     const userDoc = await userRef.get();
     const user = userDoc.exists ? userDoc.data() : {};
     const wantsToAllowLoans = asBool(user.wantsToAllowLoans, false);
     const imposeMaxLoanNumber = asBool(user.imposeMaxLoanNumber, false);
 
-    // Adjustments (values + time caps/intervals)
-    const adjustSnap = await db.collection('user_openAndCloseAdjustments')
+    // Adjustments
+    const adjSnap = await db.collection('user_openAndCloseAdjustments')
       .where('userRef', '==', userRef).get();
-    const getAdjVal = (uniqueName) => {
-      let v = null;
-      adjustSnap.forEach(doc => {
-        const d = doc.data();
-        if ((d.uniqueName || d.Name) === uniqueName) {
-          v = nz(d.User_Value ?? d.Value ?? d.value, null);
-        }
-      });
-      return v;
-    };
-    const timeRows = [];
-    adjustSnap.forEach(doc => {
+
+    // Build quick maps for values + time rows
+    const valMap = new Map(); // normalized Unique_Name -> User_Value/Value
+    const timeMap = new Map(); // normalized Unique_Name -> User_Value/Value (Type == Time)
+
+    adjSnap.forEach(doc => {
       const d = doc.data();
-      if ((d.Type || d.type) === 'Time') timeRows.push(d);
+      const name = d.Unique_Name ?? d.uniqueName ?? d.Name ?? d.name;
+      const n = norm(name);
+      const v = d.User_Value ?? d.Value ?? d.value;
+      const type = d.Type ?? d.type ?? '';
+      if (norm(type) === 'time') timeMap.set(n, nz(v, 0));
+      else valMap.set(n, nz(v, 0));
     });
-    // Expected Time fields (names can be adapted to your exact schema labels)
-    const pickTime = (label) => {
-      const row = timeRows.find(r => (r.uniqueName || r.Name) === label);
-      return row ? nz(row.User_Value ?? row.Value, 0) : 0;
-    };
-    const yearlyOpensMax = pickTime('Yearly opens allowable');
-    const halfYearRequestsMax = pickTime('Half-yearly requests allowable');
-    const minMonthsBetweenOpens = pickTime('Min interval between opens in LTM');
-    const minMonthsBetweenRequests = pickTime('Min interval between requests in LTM');
 
-    const pctRevolvingMin = nz(getAdjVal('Revolving % of total'), 0); // e.g., 70
-    const currentPerLateMultiplier = nz(getAdjVal('Current accounts / lates'), 0);
-    const maxLoansAllowed = nz(getAdjVal('Max loans allowed'), null);
+    // Value getters (case-insensitive)
+    const getVal = (label) => valMap.get(norm(label)) ?? 0;
+    const getTime = (label) => timeMap.get(norm(label)) ?? 0;
 
-    // Credit High Achiever targets
+    // expects labels in any case/spelling variants
+    const currentPerLateMultiplier = getVal('current accounts / lates')
+      || getVal('current accounts / lates + collections')
+      || getVal('current accounts by lates')
+      || 0;
+
+    const pctRevolvingMin = getVal('revolving % of total') || getVal('revolving percent of total') || 0;
+    const maxLoansAllowed = getVal('max loans allowed') || null;
+
+    const yearlyOpensMax = getTime('yearly opens allowable') || getTime('yearly allowable opens') || 0;
+    const halfYearRequestsMax = getTime('half yearly requests allowable') || getTime('half yearly allowable requests') || 0;
+    const minMonthsBetweenOpens = getTime('min interval between opens in ltm') || 0;
+    const minMonthsBetweenRequests = getTime('min interval between requests in ltm') || 0;
+
+    // CHA targets
     const chaSnap = await db.collection('credit_high_achiever_account_numbers')
       .where('userRef', '==', userRef).get();
     let chaSum = 0;
     chaSnap.forEach(doc => {
-      const v = nz(doc.data().Value ?? doc.data().value, 0);
-      chaSum += v;
+      chaSum += nz(doc.data().Value ?? doc.data().value, 0);
     });
 
-    // Conso
+    // Conso (single source for counts/lates/collections/opens/requests)
     const consoSnap = await db.collection('user_stocks_conso')
       .where('userRef', '==', userRef).get();
 
-    // Requests (hard pulls)
-    const pullsSnap = await db.collection('user_hard_pulls')
-      .where('userRef', '==', userRef).get();
+    const nowNY = nowInTZ('America/New_York');
+    const d365 = new Date(nowNY); d365.setDate(d365.getDate() - 365);
+    const d180 = new Date(nowNY); d180.setDate(d180.getDate() - 180);
 
-    // ---------- parse conso ----------
     const isCard = (d) => (d.stock || d.stockType) === 'user_credit_cards';
     const isLoan = (d) => (d.stock || d.stockType) === 'user_loans';
+    const isHardPull = (d) => (d.stock || d.stockType) === 'user_hard_pulls';
     const isAccountRow = (d) => isCard(d) || isLoan(d);
-    const isLateRow = (d) => (d.stock || d.stockType || d.category) === 'late' || d.isLate === true || (d.kind === 'late');
-    const isCollectionRow = (d) => (d.stock || d.stockType || d.category) === 'collection' || d.isCollection === true || (d.kind === 'collection');
+    const isLateRow = (d) =>
+      (d.stock || d.stockType || d.category) === 'late' || d.isLate === true || (d.kind === 'late');
+    const isCollectionRow = (d) =>
+      (d.stock || d.stockType || d.category) === 'collection' || d.isCollection === true || (d.kind === 'collection');
 
-    const nowNY = nowInTZ('America/New_York');
-    const day365 = new Date(nowNY.getTime()); day365.setDate(day365.getDate() - 365);
-    const day180 = new Date(nowNY.getTime()); day180.setDate(day180.getDate() - 180);
-
+    // ---------- parse conso ----------
+    // Step 2: "current means exists now": count by isOpen ONLY
     let openCards = 0, openLoans = 0;
+
+    // Financially-current counts (isOpen && isCurrent) — only used where needed by spec
+    let finCurrentCards = 0, finCurrentLoans = 0;
+
+    // Lates/Collections (no dedupe)
     let countLates = 0, countCollections = 0;
+
+    // Opens in last 365 + most recent open (for alternation)
     let opensIn365 = 0;
     let mostRecentOpenDate = null;
-    let mostRecentOpenType = null; // 'card' | 'loan'
+    let mostRecentOpenType = null; // 'card'|'loan'
+
+    // Requests in last 180 + most recent request
+    let requestsIn180 = 0;
+    let mostRecentReqDate = null;
 
     consoSnap.forEach(doc => {
       const d = doc.data();
 
-      // Current open accounts = isOpen && isCurrent
       if (isAccountRow(d)) {
-        const open = (d.isOpen === true) && (d.isCurrent === true);
-        if (open) {
+        // exists now
+        if (d.isOpen === true) {
           if (isCard(d)) openCards++;
           else if (isLoan(d)) openLoans++;
         }
-      }
+        // financially current (paid on time)
+        if (d.isOpen === true && d.isCurrent === true) {
+          if (isCard(d)) finCurrentCards++;
+          else if (isLoan(d)) finCurrentLoans++;
+        }
 
-      // Lates / Collections
-      if (isLateRow(d)) countLates++;
-      if (isCollectionRow(d)) countCollections++;
-
-      // Opens in last 365d + most recent open
-      if (isAccountRow(d)) {
-        const dt = asDate(d.DOFRecord ?? d.dateOpened ?? d.date_issued ?? d.Date_issued);
-        if (dt) {
-          if (dt >= day365) opensIn365++;
-          if (!mostRecentOpenDate || dt > mostRecentOpenDate) {
-            mostRecentOpenDate = dt;
+        // opens timeline
+        const od = asDate(d.DOFRecord ?? d.dateOpened ?? d.date_issued ?? d.Date_issued);
+        if (od) {
+          if (od >= d365) opensIn365++;
+          if (!mostRecentOpenDate || od > mostRecentOpenDate) {
+            mostRecentOpenDate = od;
             mostRecentOpenType = isCard(d) ? 'card' : (isLoan(d) ? 'loan' : null);
-          } else if (mostRecentOpenDate && dt.getTime() === mostRecentOpenDate.getTime()) {
-            // tie-breaker at same ms: default to card if ambiguous
+          } else if (mostRecentOpenDate && od.getTime() === mostRecentOpenDate.getTime()) {
+            // tie at same ms -> prefer card
             const thisType = isCard(d) ? 'card' : (isLoan(d) ? 'loan' : null);
-            if (thisType === 'card' && mostRecentOpenType !== 'card') {
-              mostRecentOpenType = 'card';
-            }
+            if (thisType === 'card' && mostRecentOpenType !== 'card') mostRecentOpenType = 'card';
           }
         }
       }
-    });
 
-    // Requests in last 180d + most recent request
-    let requestsIn180 = 0;
-    let mostRecentReqDate = null;
-    pullsSnap.forEach(doc => {
-      const d = doc.data();
-      const dt = asDate(d.DOFRecord ?? d.datePulled ?? d.dateRequested);
-      if (dt) {
-        if (dt >= day180) requestsIn180++;
-        if (!mostRecentReqDate || dt > mostRecentReqDate) mostRecentReqDate = dt;
+      if (isLateRow(d)) countLates++;
+      if (isCollectionRow(d)) countCollections++;
+
+      if (isHardPull(d)) {
+        const rd = asDate(d.DOFRecord ?? d.datePulled ?? d.dateRequested);
+        if (rd) {
+          if (rd >= d180) requestsIn180++;
+          if (!mostRecentReqDate || rd > mostRecentReqDate) mostRecentReqDate = rd;
+        }
       }
     });
 
     // ---------- Step 1: Goal ----------
-    const totalLatesAndCollections = countLates + countCollections; // no dedupe
-    const pathA = currentPerLateMultiplier * totalLatesAndCollections;
+    const totalLatesAndCollections = countLates + countCollections; // LOD = rows
+    // Path A: per spec it's User_Value("Current accounts / lates") * (lates + collections)
+    // (Note: you clarified meaning of 'current' as financially current, but this multiplier is a scalar.)
+    const pathA = nz(currentPerLateMultiplier, 0) * totalLatesAndCollections;
     const pathB = chaSum;
     const goalTotal = Math.max(nz(pathA,0), nz(pathB,0));
 
-    // ---------- Step 2: Current ----------
+    // ---------- Step 2: Current (exists now) ----------
     const currentOpenTotal = openCards + openLoans;
 
     // ---------- Step 3: Needed ----------
@@ -196,13 +201,12 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
       cardsToOpen = neededTotal;
       loansToOpen = 0;
     } else if (imposeMaxLoanNumber) {
-      const loanCap = maxLoansAllowed == null ? 0 : Math.max(0, maxLoansAllowed - openLoans);
+      const loanCap = (maxLoansAllowed == null) ? 0 : Math.max(0, maxLoansAllowed - openLoans);
       const minCards = ceil((nz(pctRevolvingMin,0) / 100) * neededTotal);
       cardsToOpen = Math.min(neededTotal, minCards);
       loansToOpen = Math.min(Math.max(neededTotal - cardsToOpen, 0), loanCap);
-      // guarantee total by pushing remainder to cards
       const shortfall = neededTotal - (cardsToOpen + loansToOpen);
-      if (shortfall > 0) cardsToOpen += shortfall;
+      if (shortfall > 0) cardsToOpen += shortfall; // guarantee total by pushing to cards
     } else {
       const minCards = ceil((nz(pctRevolvingMin,0) / 100) * neededTotal);
       cardsToOpen = Math.min(neededTotal, minCards);
@@ -211,19 +215,14 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
 
     const allocHeadroom = cardsToOpen + loansToOpen;
 
-    // ---------- Step 5: Timing (caps + intervals) ----------
+    // ---------- Step 5: Timing ----------
     const yearlyHeadroom = Math.max(0, nz(yearlyOpensMax,0) - nz(opensIn365,0));
     const halfYearHeadroom = Math.max(0, nz(halfYearRequestsMax,0) - nz(requestsIn180,0));
 
-    // intervals satisfied?
-    const openIntMonths = nz(minMonthsBetweenOpens, 0);
-    const reqIntMonths = nz(minMonthsBetweenRequests, 0);
+    const nextByOpenInterval = mostRecentOpenDate ? addMonthsFractional(mostRecentOpenDate, nz(minMonthsBetweenOpens,0)) : new Date(0);
+    const nextByReqInterval  = mostRecentReqDate  ? addMonthsFractional(mostRecentReqDate,  nz(minMonthsBetweenRequests,0)) : new Date(0);
 
-    const lastOpenDate = mostRecentOpenDate;
-    const lastReqDate = mostRecentReqDate;
-
-    const nextByOpenInterval = lastOpenDate ? addMonthsFractional(lastOpenDate, openIntMonths) : new Date(0);
-    const nextByReqInterval  = lastReqDate  ? addMonthsFractional(lastReqDate,  reqIntMonths)  : new Date(0);
+    const nowNY = nowInTZ('America/New_York');
     const intervalsSatisfied = (nowNY >= nextByOpenInterval) && (nowNY >= nextByReqInterval);
 
     const capsBlocked = (yearlyHeadroom <= 0) || (halfYearHeadroom <= 0);
@@ -240,55 +239,31 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
 
     let slotsNow = 0;
     if (!capsBlocked && !intervalsBlocked && allocHeadroom > 0) {
-      if (openIntMonths === 0 && reqIntMonths === 0) {
-        // multiple immediate opens allowed
+      if (nz(minMonthsBetweenOpens,0) === 0 && nz(minMonthsBetweenRequests,0) === 0) {
         slotsNow = min(allocHeadroom, yearlyHeadroom, halfYearHeadroom);
       } else {
-        // throttle to one "now"
         slotsNow = min(1, allocHeadroom, yearlyHeadroom, halfYearHeadroom);
       }
     }
 
-    // When can they open next if blocked now?
     let nextEligibleDate = null;
     if (slotsNow === 0) {
-      const capWindows = [];
-      // Next by intervals
-      capWindows.push(nextByOpenInterval);
-      capWindows.push(nextByReqInterval);
-      // Next by caps: when will 365/180 windows free a slot? (approx: add 1 day to window start)
-      // We’ll compute conservative dates based on oldest included items.
-      // For simplicity: if headroom==0, set to now + 1 day (UI signal; precise date can be computed in a follow-up CF).
-      if (yearlyHeadroom <= 0) {
-        const d = new Date(nowNY.getTime()); d.setDate(d.getDate() + 1);
-        capWindows.push(d);
-      }
-      if (halfYearHeadroom <= 0) {
-        const d = new Date(nowNY.getTime()); d.setDate(d.getDate() + 1);
-        capWindows.push(d);
-      }
-      nextEligibleDate = capWindows.length ? new Date(Math.max(...capWindows.map(d => d.getTime()))) : null;
+      const candidates = [nextByOpenInterval, nextByReqInterval];
+      if (yearlyHeadroom <= 0) { const d = new Date(nowNY); d.setDate(d.getDate()+1); candidates.push(d); }
+      if (halfYearHeadroom <= 0) { const d = new Date(nowNY); d.setDate(d.getDate()+1); candidates.push(d); }
+      nextEligibleDate = candidates.length ? new Date(Math.max(...candidates.map(d => d.getTime()))) : null;
     }
 
-    // ---------- Step 6: Build sequence for "now" ----------
+    // ---------- Step 6: Sequence for "now" ----------
     const sequence = [];
     let remCards = cardsToOpen;
     let remLoans = loansToOpen;
 
     const pickNextType = (prevType) => {
-      // Start by alternation preference
-      let preferred = null;
-      if (!prevType) {
-        // first pick alternates from MOST RECENT:
-        preferred = (mostRecentOpenType === 'card') ? 'loan' : 'card';
-      } else {
-        preferred = (prevType === 'card') ? 'loan' : 'card';
-      }
-
+      let preferred = prevType ? (prevType === 'card' ? 'loan' : 'card')
+                               : ((mostRecentOpenType === 'card') ? 'loan' : 'card');
       const prefOk = (preferred === 'card' && remCards > 0) || (preferred === 'loan' && remLoans > 0);
       if (prefOk) return preferred;
-
-      // fallbacks
       if (remCards > 0) return 'card';
       if (remLoans > 0 && wantsToAllowLoans) return 'loan';
       return null;
@@ -304,34 +279,31 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
         else if (t === 'loan') remLoans--;
         prev = t;
       }
-      // if sequence shorter than slotsNow because a bucket ran dry, keep filling with cards to guarantee total
       while (sequence.length < slotsNow && remCards > 0) {
-        sequence.push('card');
-        remCards--;
+        sequence.push('card'); remCards--;
       }
-      // final guard: truncate to slotsNow
       if (sequence.length > slotsNow) sequence.length = slotsNow;
     }
 
-    // ---------- Write output doc ----------
+    // ---------- Write ----------
     const out = {
       userRef,
       created_time: admin.firestore.Timestamp.now(),
-      status: (slotsNow > 0) ? 'proposed' : 'blocked',
+      status: (slotsNow > 0) ? 'proposed' : (neededTotal === 0 ? 'done' : 'blocked'),
       proposed: {
         can_open_now: slotsNow > 0,
         count_now: slotsNow,
-        sequence_now: sequence, // e.g., ["card","loan"]
+        sequence_now: sequence,
         next_eligible_date: nextEligibleDate ? toTs(nextEligibleDate) : null,
         cadence_months: {
-          opens_min_interval: openIntMonths,
-          requests_min_interval: reqIntMonths
+          opens_min_interval: nz(minMonthsBetweenOpens,0),
+          requests_min_interval: nz(minMonthsBetweenRequests,0)
         }
       },
       allocation: {
         goal_total: nz(goalTotal,0),
-        current_open_cards: nz(openCards,0),
-        current_open_loans: nz(openLoans,0),
+        current_open_cards: nz(openCards,0),          // exists now (isOpen only)
+        current_open_loans: nz(openLoans,0),          // exists now (isOpen only)
         needed_total: nz(neededTotal,0),
         revPctMinCards: nz(pctRevolvingMin,0),
         loan_cap: (imposeMaxLoanNumber ? nz(maxLoansAllowed,0) : null),
@@ -347,16 +319,18 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
         halfyear_requests_max: nz(halfYearRequestsMax,0),
         min_months_between_opens: nz(minMonthsBetweenOpens,0),
         min_months_between_requests: nz(minMonthsBetweenRequests,0),
-        is_blocked_caps: !!capsBlocked,
-        is_blocked_intervals: !!intervalsBlocked,
-        block_reason: blockReason
+        is_blocked_caps: !!((yearlyHeadroom <= 0) || (halfYearHeadroom <= 0)),
+        is_blocked_intervals: !intervalsSatisfied,
+        block_reason: (slotsNow > 0 || neededTotal === 0) ? null :
+                      ((yearlyHeadroom <= 0 || halfYearHeadroom <= 0) && !intervalsSatisfied)
+                        ? 'caps_and_intervals'
+                        : ((yearlyHeadroom <= 0 || halfYearHeadroom <= 0) ? 'caps' : 'intervals')
       },
       selection_protocol: 'alternate_by_most_recent_type',
-      notes: 'Write specific products separately after user picks from /user_card_recommendations.'
+      notes: 'User selects specific products from /user_card_recommendations; a separate CF writes origin docs post-approval.'
     };
 
     const docRef = await db.collection('user_open_actions_list').add(out);
     return { id: docRef.id, proposed: out.proposed, allocation: out.allocation, timing: out.timing };
   }
 );
-
