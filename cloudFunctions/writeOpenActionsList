@@ -184,6 +184,27 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     const neededTotal = Math.max(0, goalTotal - currentOpenTotal);
     const isDone = (neededTotal === 0);
 
+    // ---------- Plan epoch (baseline_open_loans) ----------
+    let baselineOpenLoans;
+    await db.runTransaction(async (tx) => {
+      const epochRef = userRef.collection('plan_meta').doc('open_actions_epoch');
+      const epochSnap = await tx.get(epochRef);
+      if (!epochSnap.exists) {
+        // First-ever run: seed baseline from current state (exists-now openLoans)
+        baselineOpenLoans = openLoans;
+        tx.create(epochRef, {
+          baseline_open_loans: baselineOpenLoans,
+          created_time: admin.firestore.FieldValue.serverTimestamp()
+        });
+      } else {
+        const ed = epochSnap.data() || {};
+        baselineOpenLoans = typeof ed.baseline_open_loans === 'number' ? ed.baseline_open_loans : openLoans;
+      }
+    });
+
+    // Only future loans (opened after epoch) count against the cap
+    const loansOpenedSinceStart = Math.max(0, openLoans - baselineOpenLoans);
+
     // ---------- Step 4: Allocation ----------
     let cardsToOpen = 0;
     let loansToOpen = 0;
@@ -192,12 +213,16 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
       cardsToOpen = neededTotal;
       loansToOpen = 0;
     } else if (imposeMaxLoanNumber) {
-      const loanCap = (maxLoansAllowed == null) ? 0 : Math.max(0, maxLoansAllowed - openLoans);
+      const loanCapRemaining = (maxLoansAllowed == null)
+        ? 0
+        : Math.max(0, maxLoansAllowed - loansOpenedSinceStart);
+
       const minCards = ceil((nz(pctRevolvingMin,0) / 100) * neededTotal);
       cardsToOpen = Math.min(neededTotal, minCards);
-      loansToOpen = Math.min(Math.max(neededTotal - cardsToOpen, 0), loanCap);
+      loansToOpen = Math.min(Math.max(neededTotal - cardsToOpen, 0), loanCapRemaining);
+
       const shortfall = neededTotal - (cardsToOpen + loansToOpen);
-      if (shortfall > 0) cardsToOpen += shortfall; // guarantee total
+      if (shortfall > 0) cardsToOpen += shortfall; // guarantee total by pushing to cards
     } else {
       const minCards = ceil((nz(pctRevolvingMin,0) / 100) * neededTotal);
       cardsToOpen = Math.min(neededTotal, minCards);
@@ -214,7 +239,6 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     const nextByReqInterval  = mostRecentReqDate  ? addMonthsFractional(mostRecentReqDate,  nz(minMonthsBetweenRequests,0)) : new Date(0);
 
     const intervalsSatisfied = (nowNY >= nextByOpenInterval) && (nowNY >= nextByReqInterval);
-
     const capsBlocked = (yearlyHeadroom <= 0) || (halfYearHeadroom <= 0);
     const intervalsBlocked = !intervalsSatisfied;
 
@@ -298,7 +322,9 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
         current_open_loans: nz(openLoans,0),          // exists now (isOpen only)
         needed_total: nz(neededTotal,0),
         revPctMinCards: nz(pctRevolvingMin,0),
-        loan_cap: (imposeMaxLoanNumber ? nz(maxLoansAllowed,0) : null),
+        loan_cap_remaining: (imposeMaxLoanNumber && maxLoansAllowed != null)
+          ? Math.max(0, maxLoansAllowed - Math.max(0, openLoans - baselineOpenLoans))
+          : null,
         cards_to_open: nz(cardsToOpen,0),
         loans_to_open: nz(loansToOpen,0)
       },
@@ -312,20 +338,23 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
         min_months_between_opens: nz(minMonthsBetweenOpens,0),
         min_months_between_requests: nz(minMonthsBetweenRequests,0),
         is_blocked_caps: !isDone && !!((yearlyHeadroom <= 0) || (halfYearHeadroom <= 0)),
-        is_blocked_intervals: !isDone && ((nz(minMonthsBetweenOpens,0) > 0 || nz(minMonthsBetweenRequests,0) > 0) ? (nextEligibleDate && nowNY < nextEligibleDate) : false),
-        block_reason: (slotsNow > 0 || isDone) ? null : ( // only when truly blocked
+        is_blocked_intervals: !isDone && ((nz(minMonthsBetweenOpens,0) > 0 || nz(minMonthsBetweenRequests,0) > 0)
+          ? (nowNY < (nextEligibleDate ?? nowNY)) // explicit false when satisfied
+          : false),
+        block_reason: (slotsNow > 0 || isDone) ? null : (
           ((yearlyHeadroom <= 0 || halfYearHeadroom <= 0) && (nowNY < nextByOpenInterval || nowNY < nextByReqInterval))
             ? 'caps_and_intervals'
-            : ((yearlyHeadroom <= 0 || halfYearHeadroom <= 0)
-                ? 'caps'
-                : 'intervals')
+            : ((yearlyHeadroom <= 0 || halfYearHeadroom <= 0) ? 'caps' : 'intervals')
         )
       },
       selection_protocol: 'alternate_by_most_recent_type',
+      meta: {
+        baseline_open_loans: baselineOpenLoans
+      },
       notes: 'User picks products from /user_card_recommendations; a separate CF writes origin docs post-approval.'
     };
 
     const docRef = await db.collection('user_open_actions_list').add(out);
-    return { id: docRef.id, proposed: out.proposed, allocation: out.allocation, timing: out.timing };
+    return { id: docRef.id, proposed: out.proposed, allocation: out.allocation, timing: out.timing, meta: out.meta };
   }
 );
