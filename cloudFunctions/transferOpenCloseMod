@@ -14,16 +14,37 @@ exports.transferOpenCloseMod = functions.region('us-central1').https.onCall(
 
       const srcSnap = await db.collection('openAndCloseAdjustments').get();
       if (srcSnap.empty) {
-        return { written: 0, skipped: 0 };
+        return { written: 0, skipped: 0, skippedByUnique: 0 };
       }
+
+      // Preload all existing Unique_Name values for this user to enforce uniqueness
+      const userRef = db.doc(`users/${uid}`);
+      const existingSnap = await db.collection('user_openAndCloseAdjustments')
+        .where('userRef', '==', userRef)
+        .select('Unique_Name') // minimal payload
+        .get();
+
+      const existingNames = new Set(
+        existingSnap.docs
+          .map(d => d.data()?.Unique_Name)
+          .filter(v => v !== undefined && v !== null)
+      );
 
       let batch = db.batch();
       let opCount = 0;
       let skipped = 0;
+      let skippedByUnique = 0;
       const now = admin.firestore.FieldValue.serverTimestamp();
 
       for (const doc of srcSnap.docs) {
         const src = doc.data() || {};
+        const uniqueName = src.Unique_Name;
+
+        // If the Unique_Name already exists for this user, skip entirely (no write, no update)
+        if (uniqueName !== undefined && existingNames.has(uniqueName)) {
+          skippedByUnique++;
+          continue;
+        }
 
         // Build the target payload (excluding timestamps for equality check)
         const targetBase = {};
@@ -40,23 +61,21 @@ exports.transferOpenCloseMod = functions.region('us-central1').https.onCall(
         if (src.Default_Interval !== undefined) targetBase.User_Interval = src.Default_Interval;
         if (src.Default_Interval_Unit !== undefined) targetBase.User_Interval_Unit = src.Default_Interval_Unit;
 
-        targetBase.userRef = db.doc(`users/${uid}`);
+        targetBase.userRef = userRef;
         targetBase.srcId = doc.id; // optional audit field you kept
 
         const destId = `${uid}_${doc.id}`;
         const destRef = db.collection('user_openAndCloseAdjustments').doc(destId);
 
-        // ==== Skip-if-unchanged check ====
-        const existingSnap = await destRef.get();
-        if (existingSnap.exists) {
-          const existing = existingSnap.data() || {};
+        // ==== Skip-if-unchanged check (only runs if Unique_Name didn't already exist) ====
+        const existingDest = await destRef.get();
+        if (existingDest.exists) {
+          const existing = existingDest.data() || {};
 
-          // Compare only keys present in targetBase (ignore timestamps)
           let equal = true;
           for (const [k, v] of Object.entries(targetBase)) {
             const cur = existing[k];
 
-            // Handle DocumentReference equality by path
             if (k === 'userRef') {
               const curPath = cur && typeof cur.path === 'string' ? cur.path : null;
               const tgtPath = targetBase.userRef.path;
@@ -64,10 +83,7 @@ exports.transferOpenCloseMod = functions.region('us-central1').https.onCall(
               continue;
             }
 
-            // Primitive / JSON-safe shallow compare
-            // (null vs undefined are different; we purposely omitted undefineds above)
             if (typeof v === 'object' && v !== null) {
-              // Shallow object compare via JSON (safe here since values are scalars)
               if (JSON.stringify(cur) !== JSON.stringify(v)) { equal = false; break; }
             } else {
               if (cur !== v) { equal = false; break; }
@@ -79,16 +95,19 @@ exports.transferOpenCloseMod = functions.region('us-central1').https.onCall(
             continue; // nothing changed; do not write
           }
         }
-        // ==================================
+        // ===============================================================================
 
         // Add timestamps only when we actually write
         const target = { ...targetBase, updated_time: now };
-        if (data && data.addCreatedTime === true && !existingSnap.exists) {
+        if (data && data.addCreatedTime === true && !existingDest.exists) {
           target.created_time = now;
         }
 
         batch.set(destRef, target, { merge: true });
         opCount++;
+
+        // Make sure subsequent source docs with the same Unique_Name in the same run also skip
+        if (uniqueName !== undefined) existingNames.add(uniqueName);
 
         if (opCount % 450 === 0) {
           await batch.commit();
@@ -100,10 +119,8 @@ exports.transferOpenCloseMod = functions.region('us-central1').https.onCall(
         await batch.commit();
       }
 
-      return { written: opCount, skipped };
+      return { written: opCount, skipped, skippedByUnique };
     } catch (err) {
-      // Optional: convert to HttpsError for surfaced UI errors
-      // throw new functions.https.HttpsError('internal', err.message);
       return { error: true, message: err?.message || String(err) };
     }
   }
