@@ -1,109 +1,147 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-// To avoid deployment errors, do not call admin.initializeApp() in your code
 
 exports.writeCloseCandidates = functions.region('us-central1').https.onCall(
   async (data, context) => {
     if (!context.auth || !context.auth.uid) {
       throw new functions.https.HttpsError('unauthenticated','Must be signed in.');
     }
+
     const uid = context.auth.uid;
     const db = admin.firestore();
     const userRef = db.doc(`users/${uid}`);
 
-    // 1) Find all CFA or AF cards in user_stocks_conso
+    // 1) Prefilter AF/CFA cards from conso
     const cardConsoSnap = await db
       .collection('user_stocks_conso')
       .where('stock','==','user_credit_cards')
       .where('userRef','==',userRef)
       .get();
 
-    const cardDocs = cardConsoSnap.docs.filter(d => {
-      const { isCFA, isAnnualFee } = d.data();
+    // Keep AF/CFA only (intermediary collection is for AF/CFA use cases)
+    const consoDocs = cardConsoSnap.docs.filter(d => {
+      const { isCFA, isAnnualFee } = d.data() || {};
       return isCFA === true || isAnnualFee === true;
     });
-    const candidateIds = cardDocs.map(d => d.id);
 
-    // 2) Initialize totals map with each card's balance (amountsOwed)
-    //    and capture credit limits
-    const totals = {};
-    const creditLimits = {};
-    cardDocs.forEach(d => {
-      const data = d.data();
-      totals[d.id] = data.amountsOwed || 0;
-      creditLimits[d.id] = data.creditLimit || 0;
+    // 2) Build payoff (balance) + creditLimit maps from conso
+    // NOTE: balances already include unpaid lates → do NOT aggregate lates again.
+    const payoffById = {};
+    const creditLimitById = {};
+    for (const d of consoDocs) {
+      const c = d.data() || {};
+      // Prefer amountsOwed if present; fallback to totalBalance for robustness
+      const payoff = Number.isFinite(c.amountsOwed) ? c.amountsOwed
+                   : Number.isFinite(c.totalBalance) ? c.totalBalance
+                   : 0;
+      payoffById[d.id] = payoff;
+      creditLimitById[d.id] = (Number.isFinite(c.creditLimit) ? c.creditLimit : null);
+    }
+
+    // 3) Pull live card docs to enforce OPEN status and get lender (source of truth)
+    const candidateIdsAF_CFA = consoDocs.map(d => d.id);
+    const candidateRefs = candidateIdsAF_CFA.map(id => db.collection('user_credit_cards').doc(id));
+    const liveSnaps = candidateRefs.length ? await db.getAll(...candidateRefs) : [];
+
+    // Build items; enforce OPEN ONLY:
+    // - If conso isOpen === false → drop
+    // - Require live.isOpen === true (live is source of truth)
+    const consoById = Object.fromEntries(consoDocs.map(d => [d.id, d]));
+    const items = [];
+
+    for (let i = 0; i < candidateIdsAF_CFA.length; i++) {
+      const id = candidateIdsAF_CFA[i];
+      const consoDoc = consoById[id];
+      const conso = consoDoc?.data() || {};
+      const liveSnap = liveSnaps[i];
+      const live = (liveSnap && liveSnap.exists) ? (liveSnap.data() || {}) : null;
+
+      // Enforce OPEN ONLY at candidates level
+      if (conso.isOpen === false) continue;
+      if (!live || live.isOpen !== true) continue;
+
+      const lender = live.lender || conso.lender || '';
+      const isAnnualFee = conso.isAnnualFee === true || live.isAnnualFee === true;
+      const isCFA = conso.isCFA === true || live.isCFA === true;
+
+      // Sort key: use Infinity when missing so it floats to the end
+      const limitSort = Number.isFinite(creditLimitById[id]) ? creditLimitById[id] : Number.POSITIVE_INFINITY;
+
+      items.push({
+        cardId: id,
+        lender,
+        isAnnualFee,
+        isCFA,
+        creditLimitSort: limitSort,
+        rawCreditLimit: creditLimitById[id],   // original value (may be null)
+        payoff: payoffById[id] || 0,
+      });
+    }
+
+    // 4) Sort by: lower limit → AF before CFA → lender A-Z
+    items.sort((a, b) => {
+      if (a.creditLimitSort !== b.creditLimitSort) return a.creditLimitSort - b.creditLimitSort;
+
+      // AF before CFA (and both before neither, though neither shouldn't occur here)
+      const aFeeRank = a.isAnnualFee ? 0 : (a.isCFA ? 1 : 2);
+      const bFeeRank = b.isAnnualFee ? 0 : (b.isCFA ? 1 : 2);
+      if (aFeeRank !== bFeeRank) return aFeeRank - bFeeRank;
+
+      return (a.lender || '').toLowerCase().localeCompare((b.lender || '').toLowerCase());
     });
 
-    // 3) Add unpaid late-payment amounts from user_credit_cards_late_payments
-    const lateSnap = await db
-      .collection('user_credit_cards_late_payments')
-      .where('userRef','==',userRef)
-      .where('isPaid','==', false)
-      .get();
-
-    lateSnap.docs.forEach(ld => {
-      const late = ld.data();
-      const cardId = late.cardRef.id;
-      if (candidateIds.includes(cardId)) {
-        totals[cardId] = (totals[cardId] || 0) + (late.amount || 0);
-      }
-    });
-
-    // 4) Load existing candidate IDs for cleanup
+    // 5) Existing docs for cleanup AFTER final open-only list is built
     const existingSnap = await db
       .collection('user_card_close_candidates')
       .where('userRef','==',userRef)
       .get();
     const existingIds = new Set(existingSnap.docs.map(d => d.id));
 
+    const candidateIdsFinal = items.map(it => it.cardId);
     const batch = db.batch();
 
-    if (candidateIds.length === 0) {
-      // No candidates → delete all old and write nullPlaceholder
+    if (candidateIdsFinal.length === 0) {
+      // wipe & placeholder (per-user to avoid cross-user collisions)
       existingIds.forEach(id => {
         batch.delete(db.collection('user_card_close_candidates').doc(id));
       });
       batch.set(
-        db.collection('user_card_close_candidates').doc('nullPlaceholder'),
+        db.collection('user_card_close_candidates').doc(`${uid}__nullPlaceholder`),
         { userRef, lender: 'nullPlaceholder' },
         { merge: true }
       );
-    } else {
-      // 5) Delete any candidates no longer relevant
-      existingIds.forEach(id => {
-        if (!candidateIds.includes(id)) {
-          batch.delete(db.collection('user_card_close_candidates').doc(id));
-        }
-      });
+      await batch.commit();
+      return { success: true, count: 0 };
+    }
 
-      // 6) Upsert each candidate
-      for (const d of cardDocs) {
-        const cardId = d.id;
-        const cardRef = db.collection('user_credit_cards').doc(cardId);
-        const cardSnap = await cardRef.get();
-        const { lender } = cardSnap.data() || {};
-
-        const payoff = totals[cardId] || 0;
-        const mustBePaidOff = payoff > 0 ? 'Yes' : 'No';
-        const creditLimit = creditLimits[cardId];
-
-        const destRef = db.collection('user_card_close_candidates').doc(cardId);
-        batch.set(
-          destRef,
-          {
-            userRef,
-            lender,
-            creditLimit,
-            totalToPayBeforeClose: payoff,
-            mustBePaidOff,
-            cardRef // ✅ new field added
-          },
-          { merge: true }
-        );
+    // Delete stale (incl. old placeholders)
+    existingIds.forEach(id => {
+      if (!candidateIdsFinal.includes(id)) {
+        batch.delete(db.collection('user_card_close_candidates').doc(id));
       }
+    });
+
+    // 6) Upsert with rank
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const destRef = db.collection('user_card_close_candidates').doc(it.cardId);
+      const mustBePaidOff = it.payoff > 0 ? 'Yes' : 'No';
+
+      batch.set(destRef, {
+        userRef,
+        lender: it.lender || null,
+        creditLimit: Number.isFinite(it.rawCreditLimit) ? it.rawCreditLimit : null,
+        totalToPayBeforeClose: it.payoff,
+        mustBePaidOff,
+        cardRef: db.collection('user_credit_cards').doc(it.cardId),
+
+        // Ranking fields
+        rank: i + 1,
+        rankRule: 'OPEN ONLY; creditLimit ASC; AF before CFA; lender A-Z',
+      }, { merge: true });
     }
 
     await batch.commit();
-    return { success: true, count: candidateIds.length };
+    return { success: true, count: items.length };
   }
 );
