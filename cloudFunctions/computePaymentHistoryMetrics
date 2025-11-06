@@ -1,0 +1,159 @@
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+exports.computePaymentHistoryMetrics = functions.region('us-central1').https.onCall(
+  async (data, context) => {
+    if (!context.auth || !context.auth.uid) return;
+
+    const uid = context.auth.uid;
+    const db = admin.firestore();
+    const userRef = db.doc(`users/${uid}`);
+
+    const nowMs = Date.now();
+    const asDate = (val) => {
+      if (!val) return null;
+      if (val.toDate) return val.toDate();
+      if (typeof val === 'object' && val.__time__) return new Date(val.__time__);
+      if (typeof val === 'string' || typeof val === 'number') return new Date(val);
+      return null;
+    };
+    const daysBetween = (d) => (d ? (nowMs - d.getTime()) / 86400000 : null);
+    const sevScore = (severity) => {
+      if (!severity) return 0;
+      const s = String(severity).trim().toLowerCase();
+      if (s === 'collection') return 10000;
+      const n = parseInt(s, 10);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const round2 = (x) => (x === null || x === undefined ? null : Number(x.toFixed(2)));
+    const stableJSON = (obj) => JSON.stringify(obj, Object.keys(obj).sort());
+    const deepEqual = (a, b) => stableJSON(a) === stableJSON(b);
+    const isLateOrCollectionStock = (stock) =>
+      typeof stock === 'string' &&
+      (stock.endsWith('_late_payments') || stock === 'user_collections_3rd_party');
+    const isAccountStock = (stock) =>
+      typeof stock === 'string' &&
+      (stock === 'user_credit_cards' || stock === 'user_loans');
+
+    const computeGroupMetrics = (arr) => {
+      const out = {
+        count: 0,
+        mostSevere: { label: null, score: null },
+        totalAmountOwed: 0,
+        averageAgeDays: null,
+        mostRecentDate: null,
+        oldestDate: null,
+      };
+      if (!arr.length) return out;
+
+      out.count = arr.length;
+      let mostSevere = { label: null, score: -1 };
+      let totalAmt = 0;
+      let ages = [];
+      let mostRecent = null;
+      let oldest = null;
+
+      for (const d of arr) {
+        const amt = Number(d.amountsOwed ?? 0);
+        if (Number.isFinite(amt)) totalAmt += amt;
+
+        const label = d.severity ?? null;
+        const score = sevScore(d.severity);
+        if (score > mostSevere.score) mostSevere = { label: label ?? 'Unknown', score };
+
+        const dt = asDate(d.DOFRecord);
+        if (dt && !isNaN(dt)) {
+          ages.push(daysBetween(dt));
+          if (!mostRecent || dt > mostRecent) mostRecent = dt;
+          if (!oldest || dt < oldest) oldest = dt;
+        }
+      }
+
+      const validAges = ages.filter((x) => Number.isFinite(x));
+      const avgAge = validAges.length
+        ? validAges.reduce((a, b) => a + b, 0) / validAges.length
+        : null;
+
+      out.mostSevere = mostSevere.score >= 0 ? mostSevere : { label: null, score: null };
+      out.totalAmountOwed = round2(totalAmt);
+      out.averageAgeDays = avgAge !== null ? round2(avgAge) : null;
+      out.mostRecentDate = mostRecent ? mostRecent.toISOString() : null;
+      out.oldestDate = oldest ? oldest.toISOString() : null;
+
+      return out;
+    };
+
+    // Load user_stocks_conso
+    const consoSnap = await db
+      .collection('user_stocks_conso')
+      .where('userRef', '==', userRef)
+      .get();
+
+    const accountDocs = [];
+    const paidDocs = [];
+    const unpaidDocs = [];
+
+    consoSnap.forEach((doc) => {
+      const d = doc.data() || {};
+      const stock = d.stock || '';
+      if (isAccountStock(stock)) {
+        accountDocs.push(d);
+      } else if (isLateOrCollectionStock(stock)) {
+        (d.isPaid ? paidDocs : unpaidDocs).push(d);
+      }
+    });
+
+    // Compute metrics
+    const currentAccountsCount = accountDocs.filter((d) => d.isCurrent === true).length;
+    const unpaid = computeGroupMetrics(unpaidDocs);
+    const paid = computeGroupMetrics(paidDocs);
+
+    const payload = { currentAccountsCount, unpaid, paid };
+
+    // Query any existing doc for this userRef
+    const existingSnap = await db
+      .collection('user_metricsPayHistory')
+      .where('userRef', '==', userRef)
+      .limit(1)
+      .get();
+
+    let destRef;
+
+    if (!existingSnap.empty) {
+      const prevDoc = existingSnap.docs[0];
+      const prev = prevDoc.data() || {};
+
+      const prevComparable = {
+        currentAccountsCount: prev.currentAccountsCount ?? null,
+        unpaid: prev.unpaid ?? {},
+        paid: prev.paid ?? {},
+      };
+
+      if (deepEqual(prevComparable, payload)) {
+        return { ok: true, changed: false, reason: 'no_update_needed' };
+      }
+
+      destRef = prevDoc.ref;
+      await destRef.set(
+        {
+          userRef,
+          ...payload,
+          created_time: prev.created_time || admin.firestore.FieldValue.serverTimestamp(),
+          updated_time: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } else {
+      destRef = db.collection('user_metricsPayHistory').doc();
+      await destRef.set({
+        userRef,
+        ...payload,
+        created_time: admin.firestore.FieldValue.serverTimestamp(),
+        updated_time: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+
+    return { ok: true, changed: true, docPath: destRef.path };
+  }
+);
