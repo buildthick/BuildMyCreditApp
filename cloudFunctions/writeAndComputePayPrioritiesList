@@ -13,7 +13,7 @@ Order: by severity — 180 days → 120 → 90 → 60 → 30.
 
 Extra principal on credit cards:
 Allocate remaining budget to the difference between the minimum payment and the full balance due on credit cards.
-Order: descending by APR, then by earlier dayOfMonthDue (earlier due dates first).
+Order: descending annualFee cards by APR, then CFA cards by APR, then remaining cards by APR.
 → This allocation is recorded as cardExtra.
 
 Collections:
