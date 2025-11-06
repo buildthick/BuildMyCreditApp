@@ -10,6 +10,7 @@ exports.computePaymentHistoryMetrics = functions.region('us-central1').https.onC
     const db = admin.firestore();
     const userRef = db.doc(`users/${uid}`);
 
+    // ---------- Helpers ----------
     const nowMs = Date.now();
     const asDate = (val) => {
       if (!val) return null;
@@ -26,9 +27,10 @@ exports.computePaymentHistoryMetrics = functions.region('us-central1').https.onC
       const n = parseInt(s, 10);
       return Number.isFinite(n) ? n : 0;
     };
-    const round2 = (x) => (x === null || x === undefined ? null : Number(x.toFixed(2)));
+    const round2 = (x) => (x == null ? null : Number(x.toFixed(2)));
     const stableJSON = (obj) => JSON.stringify(obj, Object.keys(obj).sort());
     const deepEqual = (a, b) => stableJSON(a) === stableJSON(b);
+
     const isLateOrCollectionStock = (stock) =>
       typeof stock === 'string' &&
       (stock.endsWith('_late_payments') || stock === 'user_collections_3rd_party');
@@ -39,17 +41,18 @@ exports.computePaymentHistoryMetrics = functions.region('us-central1').https.onC
     const computeGroupMetrics = (arr) => {
       const out = {
         count: 0,
-        mostSevere: { label: null, score: null },
         totalAmountOwed: 0,
         averageAgeDays: null,
         mostRecentDate: null,
         oldestDate: null,
+        mostSevere_label: null,
+        mostSevere_score: null,
       };
       if (!arr.length) return out;
 
       out.count = arr.length;
-      let mostSevere = { label: null, score: -1 };
       let totalAmt = 0;
+      let mostSevere = { label: null, score: -1 };
       let ages = [];
       let mostRecent = null;
       let oldest = null;
@@ -75,16 +78,17 @@ exports.computePaymentHistoryMetrics = functions.region('us-central1').https.onC
         ? validAges.reduce((a, b) => a + b, 0) / validAges.length
         : null;
 
-      out.mostSevere = mostSevere.score >= 0 ? mostSevere : { label: null, score: null };
       out.totalAmountOwed = round2(totalAmt);
-      out.averageAgeDays = avgAge !== null ? round2(avgAge) : null;
-      out.mostRecentDate = mostRecent ? mostRecent.toISOString() : null;
-      out.oldestDate = oldest ? oldest.toISOString() : null;
+      out.averageAgeDays = avgAge != null ? round2(avgAge) : null;
+      out.mostRecentDate = mostRecent || null;
+      out.oldestDate = oldest || null;
+      out.mostSevere_label = mostSevere.label;
+      out.mostSevere_score = mostSevere.score >= 0 ? mostSevere.score : null;
 
       return out;
     };
 
-    // Load user_stocks_conso
+    // ---------- Load source ----------
     const consoSnap = await db
       .collection('user_stocks_conso')
       .where('userRef', '==', userRef)
@@ -97,21 +101,38 @@ exports.computePaymentHistoryMetrics = functions.region('us-central1').https.onC
     consoSnap.forEach((doc) => {
       const d = doc.data() || {};
       const stock = d.stock || '';
-      if (isAccountStock(stock)) {
-        accountDocs.push(d);
-      } else if (isLateOrCollectionStock(stock)) {
-        (d.isPaid ? paidDocs : unpaidDocs).push(d);
-      }
+      if (isAccountStock(stock)) accountDocs.push(d);
+      else if (isLateOrCollectionStock(stock)) (d.isPaid ? paidDocs : unpaidDocs).push(d);
     });
 
-    // Compute metrics
+    // ---------- Compute ----------
     const currentAccountsCount = accountDocs.filter((d) => d.isCurrent === true).length;
     const unpaid = computeGroupMetrics(unpaidDocs);
     const paid = computeGroupMetrics(paidDocs);
 
-    const payload = { currentAccountsCount, unpaid, paid };
+    // Flatten payload for Firestore/FlutterFlow
+    const payload = {
+      userRef,
+      currentAccountsCount,
 
-    // Query any existing doc for this userRef
+      unpaid_count: unpaid.count,
+      unpaid_totalAmountOwed: unpaid.totalAmountOwed,
+      unpaid_averageAgeDays: unpaid.averageAgeDays,
+      unpaid_mostRecentDate: unpaid.mostRecentDate,
+      unpaid_oldestDate: unpaid.oldestDate,
+      unpaid_mostSevere_label: unpaid.mostSevere_label,
+      unpaid_mostSevere_score: unpaid.mostSevere_score,
+
+      paid_count: paid.count,
+      paid_totalAmountOwed: paid.totalAmountOwed,
+      paid_averageAgeDays: paid.averageAgeDays,
+      paid_mostRecentDate: paid.mostRecentDate,
+      paid_oldestDate: paid.oldestDate,
+      paid_mostSevere_label: paid.mostSevere_label,
+      paid_mostSevere_score: paid.mostSevere_score,
+    };
+
+    // ---------- Compare & write ----------
     const existingSnap = await db
       .collection('user_metricsPayHistory')
       .where('userRef', '==', userRef)
@@ -119,16 +140,14 @@ exports.computePaymentHistoryMetrics = functions.region('us-central1').https.onC
       .get();
 
     let destRef;
-
     if (!existingSnap.empty) {
       const prevDoc = existingSnap.docs[0];
       const prev = prevDoc.data() || {};
 
-      const prevComparable = {
-        currentAccountsCount: prev.currentAccountsCount ?? null,
-        unpaid: prev.unpaid ?? {},
-        paid: prev.paid ?? {},
-      };
+      // Compare only business fields
+      const prevComparable = { ...prev };
+      delete prevComparable.created_time;
+      delete prevComparable.updated_time;
 
       if (deepEqual(prevComparable, payload)) {
         return { ok: true, changed: false, reason: 'no_update_needed' };
@@ -137,7 +156,6 @@ exports.computePaymentHistoryMetrics = functions.region('us-central1').https.onC
       destRef = prevDoc.ref;
       await destRef.set(
         {
-          userRef,
           ...payload,
           created_time: prev.created_time || admin.firestore.FieldValue.serverTimestamp(),
           updated_time: admin.firestore.FieldValue.serverTimestamp(),
@@ -147,7 +165,6 @@ exports.computePaymentHistoryMetrics = functions.region('us-central1').https.onC
     } else {
       destRef = db.collection('user_metricsPayHistory').doc();
       await destRef.set({
-        userRef,
         ...payload,
         created_time: admin.firestore.FieldValue.serverTimestamp(),
         updated_time: admin.firestore.FieldValue.serverTimestamp(),
