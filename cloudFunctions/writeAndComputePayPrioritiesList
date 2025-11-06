@@ -59,10 +59,11 @@ exports.writeAndComputePayPrioritiesList = functions
       return Math.min(180, Math.max(30, raw)); // 30..180
     };
 
+    // ---------- Inputs ----------
     const monthlyBudget = asNum((await userRef.get()).get('monthly_budget'), 0);
     let budgetLeft = monthlyBudget;
 
-    // Discover current accounts from conso (exclude hard pulls)
+    // Discover current stocks from conso (exclude hard pulls)
     const consoSnap = await db.collection('user_stocks_conso')
       .where('userRef','==', userRef).get();
 
@@ -73,7 +74,7 @@ exports.writeAndComputePayPrioritiesList = functions
     const cardIds = conso.filter(x => x.stock === 'user_credit_cards').map(x => x.id);
     const loanIds = conso.filter(x => x.stock === 'user_loans').map(x => x.id);
 
-    // Origin docs
+    // Pull origin docs (terms & balances come from origin)
     const [cardDocs, loanDocs] = await Promise.all([
       Promise.all(cardIds.map(id => db.collection('user_credit_cards').doc(id).get())),
       Promise.all(loanIds.map(id => db.collection('user_loans').doc(id).get()))
@@ -93,15 +94,35 @@ exports.writeAndComputePayPrioritiesList = functions
       ...lateLoansSnap.docs.map(d => ({ id: d.id, ref: d.ref, kind: 'loanLate', ...d.data() }))
     ];
 
+    // --- also fetch origin accounts referenced by late docs (cardRef/loanRef) ---
+    const keyForRef = (r) => r ? `${r.parent.id}/${r.id}` : '';
+    const lateAccountRefSet = new Set();
+    lateItems.forEach(L => {
+      if (L.cardRef) lateAccountRefSet.add(keyForRef(L.cardRef));
+      if (L.loanRef) lateAccountRefSet.add(keyForRef(L.loanRef));
+    });
+    const lateAccountRefs = [...lateAccountRefSet].map(k => {
+      const [col, id] = k.split('/');
+      return db.collection(col).doc(id);
+    });
+    const lateAccountDocs = await Promise.all(lateAccountRefs.map(r => r.get()));
+    const lateAccMap = {};
+    lateAccountDocs.forEach(s => {
+      if (s.exists) {
+        const col = s.ref.parent.id; // user_credit_cards or user_loans
+        lateAccMap[keyForRef(s.ref)] = { id: s.id, ref: s.ref, collection: col, ...s.data() };
+      }
+    });
+
     // 3rd-party collections (unpaid)
     const tpcSnap = await db.collection('user_collections_3rd_party')
       .where('userRef','==', userRef).where('isPaid','==', false).get();
     const tpcItems = tpcSnap.docs.map(d => ({ id: d.id, ref: d.ref, ...d.data() }));
 
-    // Build working rows
+    // ---------- Build working rows ----------
     const items = [];
 
-    // Accounts
+    // Accounts (cards + loans)
     conso.forEach(src => {
       if (src.stock !== 'user_credit_cards' && src.stock !== 'user_loans') return;
 
@@ -114,35 +135,47 @@ exports.writeAndComputePayPrioritiesList = functions
       const balance    = isCard ? asNum(o.totalBalance, 0) : asNum(o.balance, 0);
       const dueDay     = asNum(o.dayOfMonthDue ?? null, null);
 
+      // flags for Step 3 grouping (from conso flags)
+      const isAnnualFee = !!src.isAnnualFee;
+      const isCFA       = !!src.isCFA;
+
       items.push({
         kind: 'account',
         id: src.id,
         stock: src.stock,
         name: o.commercialName ?? src.name ?? null,
         lender: o.lender ?? src.lender ?? null,
-        sourceRef: o.ref,
+        sourceRef: o.ref, // origin doc ref
         apr,
         minPayment,
         balance,
         dueDay,
+        isAnnualFee, // used only for grouping in Step 3
+        isCFA,       // used only for grouping in Step 3
         alloc_total: 0,
         alloc_min: 0,
         alloc_card_extra: 0,
       });
     });
 
-    // Unpaid lates (some may be sentToCollections)
+    // Unpaid lates (some may be sentToCollections) — use origin account's lender/name via cardRef/loanRef
     lateItems.forEach(L => {
-      const severity = String(toTierFromDOFD(L.DOFD));
+      const severity = toTierFromDOFD(L.DOFD); // numeric tier 30..180
       const sentToCollections = !!L.sentToCollections;
       const amount = asNum(L.amount, 0);
+
+      const originRefKey = L.cardRef ? keyForRef(L.cardRef) : L.loanRef ? keyForRef(L.loanRef) : '';
+      const originAcc = originRefKey ? lateAccMap[originRefKey] : null;
+
+      const lender = originAcc?.lender ?? L.lender ?? null;
+      const name   = originAcc?.commercialName ?? L.name ?? null;
 
       items.push({
         kind: sentToCollections ? 'collection_from_account' : 'late',
         id: L.id,
         stock: L.kind === 'cardLate' ? 'user_credit_cards_late_payments' : 'user_loans_late_payments',
-        name: L.name ?? null,
-        lender: L.lender ?? null,
+        name,
+        lender,
         sourceRef: L.ref,
         severity,
         amount,
@@ -167,7 +200,9 @@ exports.writeAndComputePayPrioritiesList = functions
       });
     });
 
-    // ---- Allocation ----
+    // ---------- Allocation ----------
+
+    // 1) Minimum monthly payments (cards + loans)
     const accounts = items.filter(i => i.kind === 'account');
     const totalMin = accounts.reduce((s,i) => s + i.minPayment, 0);
 
@@ -183,6 +218,7 @@ exports.writeAndComputePayPrioritiesList = functions
             budgetLeft -= alloc;
           });
       } else {
+        // Pro-rata by pressure = minPayment × APR ; tie-break earlier due day
         const weights = accounts.map(i => ({
           id: i.id,
           w: Math.max(0, i.minPayment * (i.apr / 100)),
@@ -190,6 +226,7 @@ exports.writeAndComputePayPrioritiesList = functions
         }));
         const sumW = weights.reduce((s,x)=>s+x.w,0);
         weights.sort((a,b) => (b.w - a.w) || ((a.dueDay ?? 32) - (b.dueDay ?? 32)));
+
         let remaining = budgetLeft;
         for (const w of weights) {
           const it = accounts.find(z => z.id === w.id);
@@ -201,6 +238,8 @@ exports.writeAndComputePayPrioritiesList = functions
           remaining -= pay;
         }
         budgetLeft = Math.max(0, remaining);
+
+        // Sweep any rounding remainder in sort order up to the item’s min
         for (const w of weights) {
           if (budgetLeft <= 0) break;
           const it = accounts.find(z => z.id === w.id);
@@ -214,10 +253,10 @@ exports.writeAndComputePayPrioritiesList = functions
       }
     }
 
-    // Lates by severity
+    // 2) Unpaid lates by severity (180 → 30)
     items
       .filter(i => i.kind === 'late')
-      .sort((a,b) => (parseInt(b.severity)||0) - (parseInt(a.severity)||0))
+      .sort((a,b) => (b.severity || 0) - (a.severity || 0))
       .forEach(i => {
         if (budgetLeft <= 0) return;
         const need = i.amount - i.alloc_total;
@@ -228,11 +267,14 @@ exports.writeAndComputePayPrioritiesList = functions
         budgetLeft -= pay;
       });
 
-    // Card extra principal
-    accounts
-      .filter(a => a.stock === 'user_credit_cards')
-      .sort((a,b) => (b.apr - a.apr) || ((a.dueDay ?? 32) - (b.dueDay ?? 32)))
-      .forEach(i => {
+    // 3) Card extra principal — AF first, then CFA, then others (APR desc, earlier due day)
+    const byAprThenDue = (a,b) => (b.apr - a.apr) || ((a.dueDay ?? 32) - (b.dueDay ?? 32));
+    const cardsAF   = items.filter(a => a.kind==='account' && a.stock==='user_credit_cards' && a.isAnnualFee);
+    const cardsCFA  = items.filter(a => a.kind==='account' && a.stock==='user_credit_cards' && !a.isAnnualFee && a.isCFA);
+    const cardsRest = items.filter(a => a.kind==='account' && a.stock==='user_credit_cards' && !a.isAnnualFee && !a.isCFA);
+
+    ;[cardsAF, cardsCFA, cardsRest].forEach(group => {
+      group.sort(byAprThenDue).forEach(i => {
         if (budgetLeft <= 0) return;
         const remaining = Math.max(0, i.balance - i.alloc_total);
         if (remaining <= 0) return;
@@ -241,8 +283,9 @@ exports.writeAndComputePayPrioritiesList = functions
         i.alloc_total += pay;
         budgetLeft -= pay;
       });
+    });
 
-    // Collections
+    // 4) Collections — account-origin (sentToCollections), then third-party
     items
       .filter(i => i.kind === 'collection_from_account')
       .sort((a,b) => (b.amount||0) - (a.amount||0))
@@ -269,7 +312,7 @@ exports.writeAndComputePayPrioritiesList = functions
         budgetLeft -= pay;
       });
 
-    // ---- Persist (delta-aware; write only new/changed) ----
+    // ---------- Persist (delta-aware; write only new/changed) ----------
     const priorityKey = (i) => (
       i.kind === 'account' && i.alloc_min > 0 ? 1 :
       i.kind === 'late'    && i.alloc_total > 0 ? 2 :
@@ -286,22 +329,82 @@ exports.writeAndComputePayPrioritiesList = functions
     const existingSnap = await db.collection('user_pay_priority_list')
       .where('userRef', '==', userRef).get();
 
+    // Build a minimal previous map limited to fields we write
+    const pickRelevant = (x) => {
+      if (!x) return null;
+      const base = {
+        userRef: x.userRef,
+        rank: x.rank,
+        monthlyBudget: x.monthlyBudget,
+        availableRemainder: x.availableRemainder,
+        stockType: x.stockType,
+        name: x.name,
+        lender: x.lender,
+      };
+      if (x.stockType === 'user_credit_cards' || x.stockType === 'user_loans') {
+        return {
+          ...base,
+          originDocRef: x.originDocRef || null,
+          apr: x.apr,
+          balance: x.balance,
+          minPayment: x.minPayment,
+          dayOfMonthDue: x.dayOfMonthDue ?? null,
+          budgetAllocated: x.budgetAllocated,
+          allocationBreakdown: x.allocationBreakdown || {},
+        };
+      } else if (x.stockType === 'user_credit_cards_late_payments' || x.stockType === 'user_loans_late_payments') {
+        return {
+          ...base,
+          originDocRef: x.originDocRef || null,
+          severity: x.severity,
+          amount: x.amount,
+          budgetAllocated: x.budgetAllocated,
+          allocationBreakdown: x.allocationBreakdown || {},
+        };
+      } else { // collections
+        return {
+          ...base,
+          originDocRef: x.originDocRef || null,
+          amount: x.amount,
+          budgetAllocated: x.budgetAllocated,
+          allocationBreakdown: x.allocationBreakdown || {},
+        };
+      }
+    };
+
     const existingMap = {};
-    existingSnap.forEach(d => existingMap[d.id] = d.data());
+    existingSnap.forEach(d => existingMap[d.id] = pickRelevant(d.data()));
 
     const currentIds = new Set(items.map(i => i.id));
     const batch = db.batch();
 
+    // delete stale
     existingSnap.forEach(d => { if (!currentIds.has(d.id)) batch.delete(d.ref); });
 
     ranked.forEach((i, idx) => {
       const docRef = db.collection('user_pay_priority_list').doc(i.id);
+
+      // Build FlutterFlow-friendly poly-ref object (only one field set)
+      const originDocRef = (() => {
+        if (i.kind === 'account' && i.stock === 'user_credit_cards') return { CardsDocRef: i.sourceRef };
+        if (i.kind === 'account' && i.stock === 'user_loans')        return { LoansDocRef: i.sourceRef };
+        if (i.kind === 'late' && i.stock === 'user_credit_cards_late_payments') return { CardLatesOrCollectionsDocRef: i.sourceRef };
+        if (i.kind === 'late' && i.stock === 'user_loans_late_payments')        return { LoanLatesOrCollectionsDocRef: i.sourceRef };
+        if (i.kind === 'collection_third_party') return { Collections3rdPartDocRef: i.sourceRef };
+        if (i.kind === 'collection_from_account') {
+          return i.stock === 'user_credit_cards_late_payments'
+            ? { CardLatesOrCollectionsDocRef: i.sourceRef }
+            : { LoanLatesOrCollectionsDocRef:  i.sourceRef };
+        }
+        return {};
+      })();
+
       const base = {
         userRef,
         rank: idx + 1,
         monthlyBudget,
         availableRemainder: Number(budgetLeft.toFixed(2)),
-        DocRef: i.sourceRef || null,
+        originDocRef, // DocRefMultiCollection custom object
       };
 
       let newData;
@@ -311,10 +414,10 @@ exports.writeAndComputePayPrioritiesList = functions
           i.stock === 'user_credit_cards'
             ? {
                 minPayment: Number(i.alloc_min.toFixed(2)),
-                cardExtra: Number(i.alloc_card_extra.toFixed(2)),
+                cardExtra: Number(i.alloc_card_extra.toFixed(2)), // only for cards
               }
             : {
-                minPayment: Number(i.alloc_min.toFixed(2)),
+                minPayment: Number(i.alloc_min.toFixed(2)),       // loans: no cardExtra key
               };
 
         newData = {
@@ -333,8 +436,8 @@ exports.writeAndComputePayPrioritiesList = functions
         newData = {
           ...base,
           stockType: i.stock,
-          name: i.name,
-          lender: i.lender,
+          name: i.name,       // from origin account when available
+          lender: i.lender,   // from origin account when available
           severity: i.severity,
           amount: Number(i.amount.toFixed(2)),
           budgetAllocated: Number(i.alloc_total.toFixed(2)),
@@ -356,8 +459,8 @@ exports.writeAndComputePayPrioritiesList = functions
         };
       }
 
-      const prev = existingMap[i.id];
-      if (!prev || JSON.stringify(prev) !== JSON.stringify(newData)) {
+      const prevRelevant = existingMap[i.id];
+      if (!prevRelevant || JSON.stringify(prevRelevant) !== JSON.stringify(newData)) {
         batch.set(docRef, newData, { merge: true });
       }
     });
