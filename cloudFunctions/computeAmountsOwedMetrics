@@ -1,0 +1,62 @@
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+exports.computeAmountsOwedMetrics = functions.region('us-central1').https.onCall(
+  async (data, context) => {
+    if (!context.auth || !context.auth.uid) return;
+
+    const uid = context.auth.uid;
+    const db = admin.firestore();
+    const userRef = db.doc(`users/${uid}`);
+
+    // Pull consolidated stocks for this user
+    const snap = await db
+      .collection('user_stocks_conso')
+      .where('userRef', '==', userRef)
+      .get();
+
+    let cardBal = 0;
+    let cardLimit = 0;
+    let loanBal = 0;
+    let loanLimit = 0;
+
+    snap.forEach((doc) => {
+      const d = doc.data();
+      if (!d?.isOpen) return; // utilization cares only that the account is open
+
+      // Revolving (credit cards)
+      if (d.stock === 'user_credit_cards') {
+        cardBal  += Number(d.amountsOwed ?? 0);
+        cardLimit += Number(d.creditLimit  ?? 0);
+      }
+
+      // Installment (loans)
+      if (d.stock === 'user_loans') {
+        loanBal  += Number(d.amountsOwed ?? 0);
+        loanLimit += Number(d.creditLimit  ?? 0);
+      }
+    });
+
+    // Safe utilization math (0 when denominator == 0)
+    const revolvingUtilization   = cardLimit > 0 ? cardBal / cardLimit : 0;
+    const installmentUtilization = loanLimit > 0 ? loanBal / loanLimit : 0;
+    const totalDenom = cardLimit + loanLimit;
+    const totalUtilization = totalDenom > 0 ? (cardBal + loanBal) / totalDenom : 0;
+
+    const docBody = {
+      cardBal,
+      cardLimit,
+      revolvingUtilization,
+      loanBal,
+      loanLimit,
+      installmentUtilization,
+      totalUtilization,
+      userRef,
+      updated_time: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    await db.collection('user_metricsAmountsOwed').doc(uid).set(docBody, { merge: true });
+    return { success: true, metrics: docBody };
+  }
+);
