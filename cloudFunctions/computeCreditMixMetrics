@@ -3,12 +3,84 @@ const admin = require('firebase-admin');
 // To avoid deployment errors, do not call admin.initializeApp() in your code
 
 exports.computeCreditMixMetrics = functions.region('us-central1').https.onCall(
-  (data, context) => {
-		if (!context.auth.uid) {
+  async (data, context) => {
+    if (!context.auth || !context.auth.uid) {
       return;
     }
-    // Write your code below!
 
-    // Write your code above!
+    const db = admin.firestore();
+    const uid = context.auth.uid;
+    const userRef = db.doc(`users/${uid}`);
+
+    // 1) Pull consolidated stocks for this user (top-level, filtered by userRef)
+    const consoSnap = await db
+      .collection('user_stocks_conso')
+      .where('userRef', '==', userRef)
+      .get();
+
+    // 2) Count credit-mix buckets (open + closed)
+    // Revolving: credit cards + HELOCs
+    // Installment: loans
+    let numRevolving = 0;
+    let numInstallment = 0;
+
+    consoSnap.forEach(doc => {
+      const d = doc.data();
+      const stock = d?.stock;
+
+      if (!stock) return;
+
+      // Exclude non-account stocks
+      if (
+        stock === 'user_hard_pulls' ||
+        stock === 'user_collections_3rd_party' ||
+        stock.endsWith('_late_payments')
+      ) {
+        return;
+      }
+
+      if (stock === 'user_credit_cards' || stock === 'user_HELOCs') {
+        numRevolving += 1;
+      } else if (stock === 'user_loans') {
+        numInstallment += 1;
+      }
+      // Unknown stock types are ignored by default
+    });
+
+    const totalOpenAccounts = numRevolving + numInstallment;
+    const toPct4 = (v, tot) => (tot > 0 ? Math.round((v / tot) * 1e4) / 1e4 : 0);
+
+    const next = {
+      userRef,
+      totalOpenAccounts,
+      numRevolving,
+      numInstallment,
+      pctRevolving: toPct4(numRevolving, totalOpenAccounts),
+      pctInstallment: toPct4(numInstallment, totalOpenAccounts),
+      updated_time: admin.firestore.FieldValue.serverTimestamp(),
+      source: 'user_stocks_conso@allAccounts'
+    };
+
+    // 3) Idempotent write: only if the computed values changed
+    const outRef = db.collection('user_metricsCreditMix').doc(uid);
+    const prevSnap = await outRef.get();
+    let changed = true;
+
+    if (prevSnap.exists) {
+      const p = prevSnap.data() || {};
+      changed =
+        p.totalOpenAccounts !== next.totalOpenAccounts ||
+        p.numRevolving !== next.numRevolving ||
+        p.numInstallment !== next.numInstallment ||
+        p.pctRevolving !== next.pctRevolving ||
+        p.pctInstallment !== next.pctInstallment;
+    }
+
+    if (!changed) {
+      return { status: 'noop', message: 'No changes detected.' };
+    }
+
+    await outRef.set(next, { merge: true });
+    return { status: 'ok', metrics: next };
   }
 );
