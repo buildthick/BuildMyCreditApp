@@ -311,6 +311,7 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     // ---------- FLATTENED OUTPUT ----------
     const flat = {
       userRef,
+      user_uid: uid, // handy filter in UI without composite index
       status: (slotsNow > 0) ? 'proposed' : (isDone ? 'done' : 'blocked'),
 
       // proposed_*
@@ -362,28 +363,24 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     });
     flat.proposed_sequence_now_len = sequence.length;
 
-    // ---------- UPSERT (update-if-exists, else create) ----------
-    const prevSnap = await db.collection('user_open_actions_list')
-      .where('userRef', '==', userRef)
-      .orderBy('created_time', 'desc')
-      .limit(1)
-      .get();
+    // ---------- UPSERT (deterministic doc id, update-in-place) ----------
+    const docId = `${uid}:open_actions_current`;
+    const outRef = db.collection('user_open_actions_list').doc(docId);
 
-    // First-ever write (no previous doc)
-    if (prevSnap.empty) {
+    const existingSnap = await outRef.get();
+    if (!existingSnap.exists) {
       const toCreate = {
         ...flat,
         created_time: admin.firestore.Timestamp.now(),
         last_updated_time: admin.firestore.Timestamp.now()
       };
-      const docRef = await db.collection('user_open_actions_list').add(toCreate);
-      return { created: true, updated: false, unchanged: false, id: docRef.id, ...toCreate };
+      await outRef.set(toCreate, { merge: false });
+      return { created: true, updated: false, unchanged: false, id: outRef.id, ...toCreate };
     }
 
-    // Compare with latest doc (ignore created_time / last_updated_time)
-    const prevRef = prevSnap.docs[0].ref;
-    const prevData = prevSnap.docs[0].data() || {};
-    const { created_time: _ctPrev, last_updated_time: _lutPrev, ...prevComparable } = prevData;
+    // Compare with existing (ignore created_time / last_updated_time)
+    const existing = existingSnap.data() || {};
+    const { created_time: _ctPrev, last_updated_time: _lutPrev, ...prevComparable } = existing;
     const { created_time: _ctNow, last_updated_time: _lutNow, ...nowComparable } = flat;
 
     if (toComparable(prevComparable) === toComparable(nowComparable)) {
@@ -392,17 +389,17 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
         created: false,
         updated: false,
         unchanged: true,
-        id: prevSnap.docs[0].id,
-        status: prevData.status,
-        proposed_can_open_now: prevData.proposed_can_open_now,
-        proposed_count_now: prevData.proposed_count_now,
-        allocation_needed_total: prevData.allocation_needed_total
+        id: outRef.id,
+        status: existing.status,
+        proposed_can_open_now: existing.proposed_can_open_now,
+        proposed_count_now: existing.proposed_count_now,
+        allocation_needed_total: existing.allocation_needed_total
       };
     }
 
-    // We need to update. Also remove any old sequence tail if the new one is shorter
+    // Clean up sequence tail if the new sequence is shorter
     const cleanup = {};
-    const prevLen = typeof prevData.proposed_sequence_now_len === 'number' ? prevData.proposed_sequence_now_len : 0;
+    const prevLen = typeof existing.proposed_sequence_now_len === 'number' ? existing.proposed_sequence_now_len : 0;
     const newLen = flat.proposed_sequence_now_len;
     if (prevLen > newLen) {
       for (let i = newLen; i < prevLen; i++) {
@@ -416,7 +413,7 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
       ...cleanup
     };
 
-    await prevRef.update(toUpdate);
-    return { created: false, updated: true, unchanged: false, id: prevSnap.docs[0].id, ...toUpdate };
+    await outRef.set(toUpdate, { merge: true });
+    return { created: false, updated: true, unchanged: false, id: outRef.id, ...toUpdate };
   }
 );
