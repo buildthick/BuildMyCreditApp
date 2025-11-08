@@ -27,6 +27,10 @@ then to third-party collections (user_collections_3rd_party), highest amount fir
 
 This structure allocates the entire monthlyBudget unless all balances are fully covered,
 in which case any remainder is left unallocated and all PAY actions are complete in the current month.
+
+Caculates `minimumPreservationBudget` = sum of all account minimums (cards + loans) + sum of all unpaid-late amounts,
+and excludes all collections (both account-origin and third-party).
+
 */
 
 
