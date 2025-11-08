@@ -94,7 +94,7 @@ exports.writeAndComputePayPrioritiesList = functions
       ...lateLoansSnap.docs.map(d => ({ id: d.id, ref: d.ref, kind: 'loanLate', ...d.data() }))
     ];
 
-    // --- also fetch origin accounts referenced by late docs (cardRef/loanRef) ---
+    // fetch origin accounts referenced by late docs (cardRef/loanRef)
     const keyForRef = (r) => r ? `${r.parent.id}/${r.id}` : '';
     const lateAccountRefSet = new Set();
     lateItems.forEach(L => {
@@ -150,15 +150,15 @@ exports.writeAndComputePayPrioritiesList = functions
         minPayment,
         balance,
         dueDay,
-        isAnnualFee, // used only for grouping in Step 3
-        isCFA,       // used only for grouping in Step 3
+        isAnnualFee,
+        isCFA,
         alloc_total: 0,
         alloc_min: 0,
         alloc_card_extra: 0,
       });
     });
 
-    // Unpaid lates (some may be sentToCollections) — use origin account's lender/name via cardRef/loanRef
+    // Unpaid lates (use origin account's lender/name via cardRef/loanRef)
     lateItems.forEach(L => {
       const severity = toTierFromDOFD(L.DOFD); // numeric tier 30..180
       const sentToCollections = !!L.sentToCollections;
@@ -200,11 +200,16 @@ exports.writeAndComputePayPrioritiesList = functions
       });
     });
 
+    // ---------- NEW: minimumPreservationBudget (accounts' mins + unpaid lates, no collections) ----------
+    const accounts = items.filter(i => i.kind === 'account');
+    const totalMinAccounts = accounts.reduce((s,i) => s + i.minPayment, 0);
+    const totalUnpaidLates = items.filter(i => i.kind === 'late').reduce((s,i) => s + i.amount, 0);
+    const minimumPreservationBudget = Number((totalMinAccounts + totalUnpaidLates).toFixed(2)); // ← NEW
+
     // ---------- Allocation ----------
 
     // 1) Minimum monthly payments (cards + loans)
-    const accounts = items.filter(i => i.kind === 'account');
-    const totalMin = accounts.reduce((s,i) => s + i.minPayment, 0);
+    const totalMin = totalMinAccounts; // reuse computed sum
 
     if (budgetLeft > 0) {
       if (budgetLeft >= totalMin) {
@@ -239,7 +244,7 @@ exports.writeAndComputePayPrioritiesList = functions
         }
         budgetLeft = Math.max(0, remaining);
 
-        // Sweep any rounding remainder in sort order up to the item’s min
+        // Sweep rounding remainder in the same order up to each min
         for (const w of weights) {
           if (budgetLeft <= 0) break;
           const it = accounts.find(z => z.id === w.id);
@@ -337,6 +342,7 @@ exports.writeAndComputePayPrioritiesList = functions
         rank: x.rank,
         monthlyBudget: x.monthlyBudget,
         availableRemainder: x.availableRemainder,
+        minimumPreservationBudget: x.minimumPreservationBudget, // ← NEW
         stockType: x.stockType,
         name: x.name,
         lender: x.lender,
@@ -404,6 +410,7 @@ exports.writeAndComputePayPrioritiesList = functions
         rank: idx + 1,
         monthlyBudget,
         availableRemainder: Number(budgetLeft.toFixed(2)),
+        minimumPreservationBudget, // ← NEW
         originDocRef, // DocRefMultiCollection custom object
       };
 
@@ -436,8 +443,8 @@ exports.writeAndComputePayPrioritiesList = functions
         newData = {
           ...base,
           stockType: i.stock,
-          name: i.name,       // from origin account when available
-          lender: i.lender,   // from origin account when available
+          name: i.name,
+          lender: i.lender,
           severity: i.severity,
           amount: Number(i.amount.toFixed(2)),
           budgetAllocated: Number(i.alloc_total.toFixed(2)),
@@ -466,5 +473,10 @@ exports.writeAndComputePayPrioritiesList = functions
     });
 
     await batch.commit();
-    return { success: true, count: items.length, availableRemainder: Number(budgetLeft.toFixed(2)) };
+    return {
+      success: true,
+      count: items.length,
+      availableRemainder: Number(budgetLeft.toFixed(2)),
+      minimumPreservationBudget // ← NEW
+    };
   });
