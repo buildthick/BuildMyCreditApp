@@ -1,422 +1,213 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-// Do NOT call admin.initializeApp() in your FF env
-const db = admin.firestore();
-db.settings({ ignoreUndefinedProperties: true });
+// To avoid deployment errors, do not call admin.initializeApp() in your code
 
-exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
+exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
   async (data, context) => {
     if (!context.auth || !context.auth.uid) return;
-    const uid = context.auth.uid;
-    const userRef = db.collection('users').doc(uid);
+
+    const db = admin.firestore();
+    const userDocRef = db.doc(`users/${context.auth.uid}`);
+    const serverTs = admin.firestore.FieldValue.serverTimestamp();
 
     // ---------- helpers ----------
-    const nz = (v, d=0) => (typeof v === 'number' && !isNaN(v) ? v : d);
-    const asBool = (v, d=false) => (typeof v === 'boolean' ? v : d);
-    const isTs = (t) => t && typeof t.toDate === 'function';
-    const toTs = (d) => admin.firestore.Timestamp.fromDate(d);
-    const ceil = Math.ceil;
-    const min = Math.min;
+    const asNum = (v, d = 0) => (typeof v === 'number' && isFinite(v) ? v : d);
+    const daysBetween = (a, b) => Math.floor((a - b) / (1000 * 60 * 60 * 24));
+    const monthsToDays = (m) => asNum(m, 0) * 30;
 
-    const norm = (s) => (s || '').toString().trim().toLowerCase()
-      .replace(/\s+/g, ' ')
-      .replace(/[-_]/g, ' ');
-
-    const nowInTZ = (tz="America/New_York") => {
-      const fmt = new Intl.DateTimeFormat('en-US', {
-        timeZone: tz,
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', second: '2-digit',
-        hour12: false
-      });
-      const parts = Object.fromEntries(fmt.formatToParts(new Date()).map(p => [p.type, p.value]));
-      return new Date(`${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`);
-    };
-
-    const addMonthsFractional = (date, months) => {
-      const d = new Date(date.getTime());
-      const whole = Math.trunc(months);
-      const frac = months - whole;
-      if (whole !== 0) d.setMonth(d.getMonth() + whole);
-      if (frac !== 0) d.setDate(d.getDate() + frac * 30.4375);
-      return d;
-    };
-
-    const asDate = (maybeTsOrDate) => {
-      if (!maybeTsOrDate) return null;
-      if (isTs(maybeTsOrDate)) return maybeTsOrDate.toDate();
-      if (maybeTsOrDate instanceof Date) return maybeTsOrDate;
-      const t = new Date(maybeTsOrDate);
-      return isNaN(+t) ? null : t;
-    };
-
-    // canonical comparison for flat objects (convert timestamps/dates to millis)
-    const toComparable = (obj) => {
-      const o = {};
-      for (const [k, v] of Object.entries(obj)) {
-        if (k === 'created_time' || k === 'last_updated_time') continue; // exclude volatile fields
-        if (v && typeof v === 'object' && isTs(v)) o[k] = v.toDate().getTime();
-        else if (v instanceof Date) o[k] = v.getTime();
-        else o[k] = v;
-      }
-      return JSON.stringify(o);
-    };
-
-    // ---------- load knobs ----------
-    const userDoc = await userRef.get();
-    const user = userDoc.exists ? userDoc.data() : {};
-    const wantsToAllowLoans = asBool(user.wantsToAllowLoans, false);
-    const imposeMaxLoanNumber = asBool(user.imposeMaxLoanNumber, false);
-
-    // Adjustments
-    const adjSnap = await db.collection('user_openAndCloseAdjustments')
-      .where('userRef', '==', userRef).get();
-
-    const valMap = new Map();
-    const timeMap = new Map();
-
-    adjSnap.forEach(doc => {
-      const d = doc.data();
-      const name = d.Unique_Name ?? d.uniqueName ?? d.Name ?? d.name;
-      const n = norm(name);
-      const v = d.User_Value ?? d.Value ?? d.value;
-      const type = d.Type ?? d.type ?? '';
-      if (norm(type) === 'time') timeMap.set(n, nz(v, 0));
-      else valMap.set(n, nz(v, 0));
-    });
-
-    const getVal  = (label) => valMap.get(norm(label))  ?? 0;
-    const getTime = (label) => timeMap.get(norm(label)) ?? 0;
-
-    const currentPerLateMultiplier =
-      getVal('current accounts / lates') ||
-      getVal('current accounts / lates + collections') ||
-      getVal('current accounts by lates') || 0;
-
-    const pctRevolvingMin =
-      getVal('revolving % of total') || getVal('revolving percent of total') || 0;
-
-    const maxLoansAllowed = getVal('max loans allowed') || null;
-
-    const yearlyOpensMax =
-      getTime('yearly opens allowable') || getTime('yearly allowable opens') || 0;
-
-    const halfYearRequestsMax =
-      getTime('half yearly requests allowable') || getTime('half yearly allowable requests') || 0;
-
-    const minMonthsBetweenOpens = getTime('min interval between opens in ltm') || 0;
-    const minMonthsBetweenRequests = getTime('min interval between requests in ltm') || 0;
-
-    // CHA targets (GLOBAL — no user filter)
-    const chaSnap = await db.collection('credit_high_achiever_account_numbers').get();
-    let chaSum = 0;
-    chaSnap.forEach(doc => { chaSum += nz(doc.data().Value ?? doc.data().value, 0); });
-
-    // Conso (single source)
-    const consoSnap = await db.collection('user_stocks_conso')
-      .where('userRef', '==', userRef).get();
-
-    // One "now" for entirety of function
-    const nowNY = nowInTZ('America/New_York');
-    const d365 = new Date(nowNY); d365.setDate(d365.getDate() - 365);
-    const d180 = new Date(nowNY); d180.setDate(d180.getDate() - 180);
-
-    const stockName = (d) => (d.stock || d.stockType || '').toString();
-
-    const isCard = (d) => stockName(d) === 'user_credit_cards';
-    const isLoan = (d) => stockName(d) === 'user_loans';
-    const isHardPull = (d) => stockName(d) === 'user_hard_pulls';
-    const isAccountRow = (d) => isCard(d) || isLoan(d);
-
-    // Your actual LOD names:
-    const isLateRow = (d) => stockName(d).endsWith('_late_payments');
-    const isCollectionRow = (d) => stockName(d) === 'user_collections_3rd_party';
-
-    // ---------- parse conso ----------
-    let openCards = 0, openLoans = 0;
-    let countLates = 0, countCollections = 0;
-
-    let opensIn365 = 0;
-    let mostRecentOpenDate = null;
-    let mostRecentOpenType = null; // 'card'|'loan'
-
-    let requestsIn180 = 0;
-    let mostRecentReqDate = null;
-
-    consoSnap.forEach(doc => {
-      const d = doc.data();
-
-      if (isAccountRow(d)) {
-        if (d.isOpen === true) {
-          if (isCard(d)) openCards++;
-          else if (isLoan(d)) openLoans++;
-        }
-
-        const od = asDate(d.DOFRecord ?? d.dateOpened ?? d.date_issued ?? d.Date_issued);
-        if (od) {
-          if (od >= d365) opensIn365++;
-          if (!mostRecentOpenDate || od > mostRecentOpenDate) {
-            mostRecentOpenDate = od;
-            mostRecentOpenType = isCard(d) ? 'card' : (isLoan(d) ? 'loan' : null);
-          } else if (mostRecentOpenDate && od.getTime() === mostRecentOpenDate.getTime()) {
-            const thisType = isCard(d) ? 'card' : (isLoan(d) ? 'loan' : null);
-            if (thisType === 'card' && mostRecentOpenType !== 'card') mostRecentOpenType = 'card';
-          }
-        }
-      }
-
-      if (isLateRow(d)) countLates++;
-      if (isCollectionRow(d)) countCollections++;
-
-      if (isHardPull(d)) {
-        const rd = asDate(d.DOFRecord ?? d.datePulled ?? d.dateRequested);
-        if (rd) {
-          if (rd >= d180) requestsIn180++;
-          if (!mostRecentReqDate || rd > mostRecentReqDate) mostRecentReqDate = rd;
-        }
-      }
-    });
-
-    // ---------- Step 1: Goal ----------
-    const totalLatesAndCollections = countLates + countCollections;
-    const pathA = nz(currentPerLateMultiplier, 0) * totalLatesAndCollections;
-    const pathB = chaSum;
-    const goalTotal = Math.max(nz(pathA,0), nz(pathB,0));
-
-    // ---------- Step 2: Current (exists now) ----------
-    const currentOpenTotal = openCards + openLoans;
-
-    // ---------- Step 3: Needed ----------
-    const neededTotal = Math.max(0, goalTotal - currentOpenTotal);
-    const isDone = (neededTotal === 0);
-
-    // ---------- Plan epoch (baseline_open_loans; “cap only on future loans”) ----------
-    let baselineOpenLoans;
-    await db.runTransaction(async (tx) => {
-      const epochRef = userRef.collection('plan_meta').doc('open_actions_epoch');
-      const epochSnap = await tx.get(epochRef);
-      if (!epochSnap.exists) {
-        baselineOpenLoans = openLoans; // seed from current snapshot
-        tx.create(epochRef, {
-          baseline_open_loans: baselineOpenLoans,
-          created_time: admin.firestore.FieldValue.serverTimestamp()
-        });
-      } else {
-        const ed = epochSnap.data() || {};
-        baselineOpenLoans = typeof ed.baseline_open_loans === 'number' ? ed.baseline_open_loans : openLoans;
-      }
-    });
-
-    const loansOpenedSinceStart = Math.max(0, openLoans - baselineOpenLoans);
-
-    // ---------- Step 4: Allocation ----------
-    let cardsToOpen = 0;
-    let loansToOpen = 0;
-    let loanCapRemaining = null;
-
-    if (!wantsToAllowLoans) {
-      cardsToOpen = neededTotal;
-      loansToOpen = 0;
-    } else if (imposeMaxLoanNumber) {
-      loanCapRemaining = (maxLoansAllowed == null)
-        ? 0
-        : Math.max(0, maxLoansAllowed - loansOpenedSinceStart);
-
-      const minCards = ceil((nz(pctRevolvingMin,0) / 100) * neededTotal);
-      cardsToOpen = Math.min(neededTotal, minCards);
-      loansToOpen = Math.min(Math.max(neededTotal - cardsToOpen, 0), loanCapRemaining);
-
-      const shortfall = neededTotal - (cardsToOpen + loansToOpen);
-      if (shortfall > 0) cardsToOpen += shortfall; // guarantee total
-    } else {
-      const minCards = ceil((nz(pctRevolvingMin,0) / 100) * neededTotal);
-      cardsToOpen = Math.min(neededTotal, minCards);
-      loansToOpen = Math.max(0, neededTotal - cardsToOpen);
-    }
-
-    const allocHeadroom = cardsToOpen + loansToOpen;
-
-    // ---------- Step 5: Timing ----------
-    const yearlyHeadroom = Math.max(0, nz(yearlyOpensMax,0) - nz(opensIn365,0));
-    const halfYearHeadroom = Math.max(0, nz(halfYearRequestsMax,0) - nz(requestsIn180,0));
-
-    const nextByOpenInterval = mostRecentOpenDate ? addMonthsFractional(mostRecentOpenDate, nz(minMonthsBetweenOpens,0)) : new Date(0);
-    const nextByReqInterval  = mostRecentReqDate  ? addMonthsFractional(mostRecentReqDate,  nz(minMonthsBetweenRequests,0)) : new Date(0);
-
-    const intervalsSatisfied = (nowNY >= nextByOpenInterval) && (nowNY >= nextByReqInterval);
-    const capsBlocked = (yearlyHeadroom <= 0) || (halfYearHeadroom <= 0);
-    const intervalsBlocked = !intervalsSatisfied;
-
-    let blockReason = null;
-    if (!isDone) {
-      if (capsBlocked) {
-        if (yearlyHeadroom <= 0) blockReason = 'yearly_cap_reached';
-        if (halfYearHeadroom <= 0) blockReason = blockReason ? `${blockReason}|halfyear_requests_cap_reached` : 'halfyear_requests_cap_reached';
-      }
-      if (intervalsBlocked) {
-        blockReason = blockReason ? `${blockReason}|interval_not_satisfied` : 'interval_not_satisfied';
-      }
-    }
-
-    // slots that can be executed *now*
-    let slotsNow = 0;
-    if (!isDone && !capsBlocked && !intervalsBlocked && allocHeadroom > 0) {
-      if (nz(minMonthsBetweenOpens,0) === 0 && nz(minMonthsBetweenRequests,0) === 0) {
-        slotsNow = min(allocHeadroom, yearlyHeadroom, halfYearHeadroom);
-      } else {
-        slotsNow = min(1, allocHeadroom, yearlyHeadroom, halfYearHeadroom);
-      }
-    }
-
-    // Next eligible date only if blocked and not done
-    let nextEligibleDate = null;
-    if (!isDone && slotsNow === 0) {
-      const candidates = [nextByOpenInterval, nextByReqInterval];
-      if (yearlyHeadroom <= 0) { const d = new Date(nowNY); d.setDate(d.getDate()+1); candidates.push(d); }
-      if (halfYearHeadroom <= 0) { const d = new Date(nowNY); d.setDate(d.getDate()+1); candidates.push(d); }
-      nextEligibleDate = candidates.length ? new Date(Math.max(...candidates.map(d => d.getTime()))) : null;
-    }
-
-    // ---------- Step 6: Sequence for "now" ----------
-    const sequence = [];
-    let remCards = cardsToOpen;
-    let remLoans = loansToOpen;
-
-    const pickNextType = (prevType) => {
-      let preferred = prevType ? (prevType === 'card' ? 'loan' : 'card')
-                               : ((mostRecentOpenType === 'card') ? 'loan' : 'card');
-      const prefOk = (preferred === 'card' && remCards > 0) || (preferred === 'loan' && remLoans > 0);
-      if (prefOk) return preferred;
-      if (remCards > 0) return 'card';
-      if (remLoans > 0 && wantsToAllowLoans) return 'loan';
-      return null;
-    };
-
-    if (slotsNow > 0) {
-      let prev = null;
-      for (let i = 0; i < slotsNow; i++) {
-        const t = pickNextType(prev);
-        if (!t) break;
-        sequence.push(t);
-        if (t === 'card') remCards--;
-        else if (t === 'loan') remLoans--;
-        prev = t;
-      }
-      while (sequence.length < slotsNow && remCards > 0) {
-        sequence.push('card'); remCards--;
-      }
-      if (sequence.length > slotsNow) sequence.length = slotsNow;
-    }
-
-    // ---------- FLATTENED OUTPUT ----------
-    const flat = {
-      userRef,
-      status: (slotsNow > 0) ? 'proposed' : (isDone ? 'done' : 'blocked'),
-
-      // proposed_*
-      proposed_can_open_now: slotsNow > 0,
-      proposed_count_now: slotsNow,
-      proposed_next_eligible_date: isDone ? null : (nextEligibleDate ? toTs(nextEligibleDate) : null),
-      proposed_cadence_opens_min_interval: nz(minMonthsBetweenOpens,0),
-      proposed_cadence_requests_min_interval: nz(minMonthsBetweenRequests,0),
-
-      // allocation_*
-      allocation_goal_total: nz(goalTotal,0),
-      allocation_current_open_cards: nz(openCards,0),
-      allocation_current_open_loans: nz(openLoans,0),
-      allocation_needed_total: nz(neededTotal,0),
-      allocation_revPctMinCards: nz(pctRevolvingMin,0),
-      allocation_loan_cap_remaining: (imposeMaxLoanNumber && maxLoansAllowed != null)
-        ? Math.max(0, maxLoansAllowed - loansOpenedSinceStart)
-        : null,
-      allocation_cards_to_open: nz(cardsToOpen,0),
-      allocation_loans_to_open: nz(loansToOpen,0),
-
-      // timing_*
-      timing_opens_in_365: nz(opensIn365,0),
-      timing_requests_in_180: nz(requestsIn180,0),
-      timing_most_recent_open: mostRecentOpenDate ? toTs(mostRecentOpenDate) : null,
-      timing_most_recent_request: mostRecentReqDate ? toTs(mostRecentReqDate) : null,
-      timing_yearly_opens_max: nz(yearlyOpensMax,0),
-      timing_halfyear_requests_max: nz(halfYearRequestsMax,0),
-      timing_min_months_between_opens: nz(minMonthsBetweenOpens,0),
-      timing_min_months_between_requests: nz(minMonthsBetweenRequests,0),
-      timing_is_blocked_caps: !isDone && !!((yearlyHeadroom <= 0) || (halfYearHeadroom <= 0)),
-      timing_is_blocked_intervals: !isDone && ((nz(minMonthsBetweenOpens,0) > 0 || nz(minMonthsBetweenRequests,0) > 0)
-        ? (nowNY < (nextEligibleDate ?? nowNY))
-        : false),
-      timing_block_reason: (slotsNow > 0 || isDone) ? null : (
-        ((yearlyHeadroom <= 0 || halfYearHeadroom <= 0) && (nowNY < nextByOpenInterval || nowNY < nextByReqInterval))
-          ? 'caps_and_intervals'
-          : ((yearlyHeadroom <= 0 || halfYearHeadroom <= 0) ? 'caps' : 'intervals')
-      ),
-
-      // selection/meta
-      selection_protocol: 'alternate_by_most_recent_type',
-      meta_baseline_open_loans: baselineOpenLoans
-    };
-
-    // index the sequence for FF binding
-    sequence.forEach((t, i) => {
-      flat[`proposed_sequence_now_${i}`] = t;
-    });
-    flat.proposed_sequence_now_len = sequence.length;
-
-    // ---------- UPSERT (update-if-exists, else create) ----------
-    const prevSnap = await db.collection('user_open_actions_list')
-      .where('userRef', '==', userRef)
-      .orderBy('created_time', 'desc')
-      .limit(1)
+    // ---------- load candidates ----------
+    const candSnap = await db.collection('user_card_close_candidates')
+      .where('userRef', '==', userDocRef)
       .get();
 
-    // First-ever write (no previous doc)
-    if (prevSnap.empty) {
-      const toCreate = {
-        ...flat,
-        created_time: admin.firestore.Timestamp.now(),
-        last_updated_time: admin.firestore.Timestamp.now()
-      };
-      const docRef = await db.collection('user_open_actions_list').add(toCreate);
-      return { created: true, updated: false, unchanged: false, id: docRef.id, ...toCreate };
+    if (candSnap.empty) {
+      await clearListForUser(db, userDocRef);
+      await db.collection('user_close_actions_list').doc(`summary_${context.auth.uid}`).set({
+        userRef: userDocRef,
+        currentUtilizationPct: 0,
+        utilizationRulePct: null,
+        closesInLast365: 0,           // <- fixed field
+        mostRecentClose: null,
+        yearlyClosesAllowable: null,
+        minIntervalBetweenClosesDays: null,
+        closableNowCount: 0,
+        created_time: serverTs,
+      }, { merge: true });
+      return { candidates: 0, closableNowCount: 0 };
     }
 
-    // Compare with latest doc (ignore created_time / last_updated_time)
-    const prevRef = prevSnap.docs[0].ref;
-    const prevData = prevSnap.docs[0].data() || {};
-    const { created_time: _ctPrev, last_updated_time: _lutPrev, ...prevComparable } = prevData;
-    const { created_time: _ctNow, last_updated_time: _lutNow, ...nowComparable } = flat;
+    // ---------- load adjustments (Close rules) ----------
+    const adjSnap = await db.collection('user_openAndCloseAdjustments')
+      .where('userRef', '==', userDocRef)
+      .where('Action_Type', '==', 'Close')
+      .get();
 
-    if (toComparable(prevComparable) === toComparable(nowComparable)) {
-      // Unchanged → no write
-      return {
-        created: false,
-        updated: false,
-        unchanged: true,
-        id: prevSnap.docs[0].id,
-        status: prevData.status,
-        proposed_can_open_now: prevData.proposed_can_open_now,
-        proposed_count_now: prevData.proposed_count_now,
-        allocation_needed_total: prevData.allocation_needed_total
-      };
-    }
+    let utilPct = null;                 // e.g., 30
+    let yearlyClosesAllowable = null;   // e.g., 6
+    let minIntervalMonths = null;       // e.g., 3
 
-    // We need to update. Also remove any old sequence tail if the new one is shorter
-    const cleanup = {};
-    const prevLen = typeof prevData.proposed_sequence_now_len === 'number' ? prevData.proposed_sequence_now_len : 0;
-    const newLen = flat.proposed_sequence_now_len;
-    if (prevLen > newLen) {
-      for (let i = newLen; i < prevLen; i++) {
-        cleanup[`proposed_sequence_now_${i}`] = admin.firestore.FieldValue.delete();
+    adjSnap.forEach(d => {
+      const x = d.data() || {};
+      switch (x.Unique_Name) {
+        case 'Utilization':
+          utilPct = asNum(x.User_Value, utilPct);
+          break;
+        case 'Yearly closes allowable':
+          yearlyClosesAllowable = asNum(x.User_Value, yearlyClosesAllowable);
+          break;
+        case 'Min interval between closes in LTM':
+          minIntervalMonths = asNum(x.User_Value, minIntervalMonths);
+          break;
+      }
+    });
+
+    if (utilPct == null) utilPct = 30;
+    if (yearlyClosesAllowable == null) yearlyClosesAllowable = 2;
+    if (minIntervalMonths == null) minIntervalMonths = 2;
+
+    const utilThreshold = utilPct / 100;
+    const minIntervalDays = monthsToDays(minIntervalMonths);
+
+    // ---------- open cards for current utilization ----------
+    const openCardsSnap = await db.collection('user_credit_cards')
+      .where('userRef', '==', userDocRef)
+      .where('isOpen', '==', true)
+      .get();
+
+    let sumBal = 0, sumLimit = 0;
+    openCardsSnap.forEach(d => {
+      const c = d.data() || {};
+      sumBal += asNum(c.totalBalance, 0);
+      sumLimit += asNum(c.creditLimit, 0);
+    });
+    const currentUtilization = sumLimit > 0 ? (sumBal / sumLimit) : 0;
+
+    // ---------- closure history in last 365 days ----------
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+
+    const closedCardsSnap = await db.collection('user_credit_cards')
+      .where('userRef', '==', userDocRef)
+      .where('isOpen', '==', false)
+      .get();
+
+    let closesInLast365 = 0;           // <- this is the variable we use below
+    let mostRecentClose = null;
+
+    closedCardsSnap.forEach(d => {
+      const c = d.data() || {};
+      const dc = c.dateClosed && c.dateClosed.toDate ? c.dateClosed.toDate() : null;
+      if (!dc) return;
+      if (dc >= cutoff) closesInLast365 += 1;
+      if (!mostRecentClose || dc > mostRecentClose) mostRecentClose = dc;
+    });
+
+    const daysSinceMostRecentClose = mostRecentClose ? daysBetween(now, mostRecentClose) : Infinity;
+    let remainingCloses = Math.max(0, yearlyClosesAllowable - closesInLast365);
+
+    // ---------- sort candidates by rank ----------
+    const candidates = candSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => asNum(a.rank, 999999) - asNum(b.rank, 999999));
+
+    // ---------- clear previous output ----------
+    await clearListForUser(db, userDocRef);
+
+    // ---------- evaluate ----------
+    let closableNowCount = 0;
+    let batch = db.batch();
+    let opCount = 0;
+
+    for (const cand of candidates) {
+      const cardRef = cand.cardRef || null;
+      const cardSnap = cardRef ? await cardRef.get() : null;
+      const card = (cardSnap && cardSnap.exists) ? (cardSnap.data() || {}) : {};
+
+      const balance = asNum(card.totalBalance, 0);
+      const limit = asNum(card.creditLimit, 0);
+      const lender = card.lender || cand.lender || '';
+      const reasons = [];
+
+      if (balance > 0) reasons.push('balance_gt_0');
+
+      const newSumLimit = Math.max(0, sumLimit - limit);
+      const newSumBal   = Math.max(0, sumBal - balance);
+      const simulatedUtil = newSumLimit > 0 ? (newSumBal / newSumLimit) : 0;
+
+      const willBreachUtilization = simulatedUtil > utilThreshold;
+      if (willBreachUtilization) reasons.push('utilization_breach');
+
+      if (remainingCloses <= 0) reasons.push('yearly_close_limit_reached');
+      if (daysSinceMostRecentClose < minIntervalDays) reasons.push('min_interval_not_met');
+
+      const eligibleNow = reasons.length === 0;
+
+      if (eligibleNow) {
+        closableNowCount += 1;
+        remainingCloses = Math.max(0, remainingCloses - 1);
+        sumLimit = newSumLimit;
+        sumBal   = newSumBal;
+      }
+
+      const outRef = db.collection('user_close_actions_list').doc(`${context.auth.uid}_${cand.id}`);
+      batch.set(outRef, {
+        userRef: userDocRef,
+        cardRef: cardRef || null,
+        rank: asNum(cand.rank, null),
+        lender,
+        creditLimit: limit,
+        totalBalance: balance,
+        simulatedUtilization: simulatedUtil,  // 0–1
+        willBreachUtilization,
+        eligibleNow,
+        ineligibilityReasons: reasons,
+        created_time: serverTs,
+      }, { merge: true });
+
+      opCount++;
+      if (opCount >= 450) {
+        await batch.commit();
+        batch = db.batch();
+        opCount = 0;
       }
     }
 
-    const toUpdate = {
-      ...flat,
-      last_updated_time: admin.firestore.Timestamp.now(),
-      ...cleanup
-    };
+    if (opCount > 0) await batch.commit();
 
-    await prevRef.update(toUpdate);
-    return { created: false, updated: true, unchanged: false, id: prevSnap.docs[0].id, ...toUpdate };
+    // ---------- summary (fixed field name) ----------
+    await db.collection('user_close_actions_list').doc(`summary_${context.auth.uid}`).set({
+      userRef: userDocRef,
+      currentUtilizationPct: currentUtilization * 100,
+      utilizationRulePct: utilPct,
+      closesInLast365,                           // <- use the defined var
+      mostRecentClose: mostRecentClose || null,
+      yearlyClosesAllowable,
+      minIntervalBetweenClosesDays: minIntervalDays,
+      closableNowCount,
+      created_time: serverTs,
+    }, { merge: true });
+
+    return { candidates: candidates.length, closableNowCount };
   }
 );
+
+// ---------- helper ----------
+async function clearListForUser(db, userRef) {
+  const q = await db.collection('user_close_actions_list')
+    .where('userRef', '==', userRef)
+    .get();
+
+  if (q.empty) return;
+  let batch = db.batch();
+  let n = 0;
+  for (const doc of q.docs) {
+    batch.delete(doc.ref);
+    n++;
+    if (n >= 450) {
+      await batch.commit();   // <- ensure we await each chunk
+      batch = db.batch();
+      n = 0;
+    }
+  }
+  if (n > 0) await batch.commit();
+}
