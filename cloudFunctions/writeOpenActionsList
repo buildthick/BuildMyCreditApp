@@ -62,6 +62,43 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
       return JSON.stringify(o);
     };
 
+    // serialize for client (no DocumentReference, no Firestore Timestamp)
+    const tsToMillis = (v) => (v && typeof v.toDate === 'function')
+      ? v.toDate().getTime()
+      : (v instanceof Date ? v.getTime() : (typeof v === 'number' ? v : null));
+
+    const makeClientPayload = (id, data) => ({
+      id,
+      created_time_ms: tsToMillis(data.created_time) ?? null,
+      last_updated_time_ms: tsToMillis(data.last_updated_time) ?? null,
+      status: data.status ?? null,
+
+      proposed_can_open_now: !!data.proposed_can_open_now,
+      proposed_count_now: data.proposed_count_now ?? 0,
+      proposed_sequence_now_len: data.proposed_sequence_now_len ?? 0,
+      proposed_sequence_now_0: data.proposed_sequence_now_0 ?? null,
+      proposed_sequence_now_1: data.proposed_sequence_now_1 ?? null,
+      proposed_next_eligible_date_ms: tsToMillis(data.proposed_next_eligible_date) ?? null,
+      proposed_cadence_opens_min_interval: data.proposed_cadence_opens_min_interval ?? 0,
+      proposed_cadence_requests_min_interval: data.proposed_cadence_requests_min_interval ?? 0,
+
+      allocation_goal_total: data.allocation_goal_total ?? 0,
+      allocation_current_open_cards: data.allocation_current_open_cards ?? 0,
+      allocation_current_open_loans: data.allocation_current_open_loans ?? 0,
+      allocation_needed_total: data.allocation_needed_total ?? 0,
+      allocation_revPctMinCards: data.allocation_revPctMinCards ?? 0,
+      allocation_loan_cap_remaining: (data.allocation_loan_cap_remaining ?? null),
+      allocation_cards_to_open: data.allocation_cards_to_open ?? 0,
+      allocation_loans_to_open: data.allocation_loans_to_open ?? 0,
+
+      timing_is_blocked_caps: !!data.timing_is_blocked_caps,
+      timing_is_blocked_intervals: !!data.timing_is_blocked_intervals,
+      timing_block_reason: data.timing_block_reason ?? null,
+
+      selection_protocol: data.selection_protocol ?? null,
+      meta_baseline_open_loans: data.meta_baseline_open_loans ?? null
+    });
+
     // ---------- load knobs ----------
     const userDoc = await userRef.get();
     const user = userDoc.exists ? userDoc.data() : {};
@@ -128,7 +165,7 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     const isHardPull = (d) => stockName(d) === 'user_hard_pulls';
     const isAccountRow = (d) => isCard(d) || isLoan(d);
 
-    // Your actual LOD names:
+    // Actual LOD names:
     const isLateRow = (d) => stockName(d).endsWith('_late_payments');
     const isCollectionRow = (d) => stockName(d) === 'user_collections_3rd_party';
 
@@ -310,8 +347,8 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
 
     // ---------- FLATTENED OUTPUT ----------
     const flat = {
-      userRef,
-      user_uid: uid, // handy filter in UI without composite index
+      userRef,            // stored in Firestore, NOT returned to client
+      user_uid: uid,      // handy filter in UI without composite index
       status: (slotsNow > 0) ? 'proposed' : (isDone ? 'done' : 'blocked'),
 
       // proposed_*
@@ -339,12 +376,12 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
       timing_most_recent_open: mostRecentOpenDate ? toTs(mostRecentOpenDate) : null,
       timing_most_recent_request: mostRecentReqDate ? toTs(mostRecentReqDate) : null,
       timing_yearly_opens_max: nz(yearlyOpensMax,0),
-      timing_halfyear_requests_max: nz(halfYearRequestsMax,0),
+      timing_halfyear_requests_max: nz(halfYearHeadroom > 0 ? halfYearHeadroom + requestsIn180 : halfYearHeadroom + requestsIn180), // safe echo
       timing_min_months_between_opens: nz(minMonthsBetweenOpens,0),
       timing_min_months_between_requests: nz(minMonthsBetweenRequests,0),
       timing_is_blocked_caps: !isDone && !!((yearlyHeadroom <= 0) || (halfYearHeadroom <= 0)),
       timing_is_blocked_intervals: !isDone && ((nz(minMonthsBetweenOpens,0) > 0 || nz(minMonthsBetweenRequests,0) > 0)
-        ? (nowNY < (nextEligibleDate ?? nowNY))
+        ? (nextEligibleDate ? nowNY < nextEligibleDate : false)
         : false),
       timing_block_reason: (slotsNow > 0 || isDone) ? null : (
         ((yearlyHeadroom <= 0 || halfYearHeadroom <= 0) && (nowNY < nextByOpenInterval || nowNY < nextByReqInterval))
@@ -363,7 +400,7 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     });
     flat.proposed_sequence_now_len = sequence.length;
 
-    // ---------- UPSERT (deterministic doc id, update-in-place) ----------
+    // ---------- UPSERT (deterministic doc id, update-in-place, safe returns) ----------
     const docId = `${uid}:open_actions_current`;
     const outRef = db.collection('user_open_actions_list').doc(docId);
 
@@ -375,7 +412,7 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
         last_updated_time: admin.firestore.Timestamp.now()
       };
       await outRef.set(toCreate, { merge: false });
-      return { created: true, updated: false, unchanged: false, id: outRef.id, ...toCreate };
+      return { created: true, updated: false, unchanged: false, ...makeClientPayload(outRef.id, toCreate) };
     }
 
     // Compare with existing (ignore created_time / last_updated_time)
@@ -385,16 +422,7 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
 
     if (toComparable(prevComparable) === toComparable(nowComparable)) {
       // Unchanged → no write
-      return {
-        created: false,
-        updated: false,
-        unchanged: true,
-        id: outRef.id,
-        status: existing.status,
-        proposed_can_open_now: existing.proposed_can_open_now,
-        proposed_count_now: existing.proposed_count_now,
-        allocation_needed_total: existing.allocation_needed_total
-      };
+      return { created: false, updated: false, unchanged: true, ...makeClientPayload(outRef.id, existing) };
     }
 
     // Clean up sequence tail if the new sequence is shorter
@@ -414,6 +442,6 @@ exports.writeOpenActionsList = functions.region('us-central1').https.onCall(
     };
 
     await outRef.set(toUpdate, { merge: true });
-    return { created: false, updated: true, unchanged: false, id: outRef.id, ...toUpdate };
+    return { created: false, updated: true, unchanged: false, ...makeClientPayload(outRef.id, toUpdate) };
   }
 );
