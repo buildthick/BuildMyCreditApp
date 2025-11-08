@@ -26,7 +26,7 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
         userRef: userDocRef,
         currentUtilizationPct: 0,
         utilizationRulePct: null,
-        closesInLast365: 0,           // <- fixed field
+        closesInLast365: 0,
         mostRecentClose: null,
         yearlyClosesAllowable: null,
         minIntervalBetweenClosesDays: null,
@@ -91,7 +91,7 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
       .where('isOpen', '==', false)
       .get();
 
-    let closesInLast365 = 0;           // <- this is the variable we use below
+    let closesInLast365 = 0;
     let mostRecentClose = null;
 
     closedCardsSnap.forEach(d => {
@@ -149,6 +149,20 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
         sumBal   = newSumBal;
       }
 
+      // ----- FlutterFlow-friendly flattening for reasons -----
+      const numIneligibilityReasons = reasons.length;
+      const flatReasons = { numIneligibilityReasons };
+
+      // Fill sequential fields (1-based)
+      reasons.forEach((r, i) => {
+        flatReasons[`ineligibilityReasons${i + 1}`] = r;
+      });
+
+      // Clear any stale reason fields up to a safe cap (e.g., 8)
+      for (let i = reasons.length + 1; i <= 8; i++) {
+        flatReasons[`ineligibilityReasons${i}`] = admin.firestore.FieldValue.delete();
+      }
+
       const outRef = db.collection('user_close_actions_list').doc(`${context.auth.uid}_${cand.id}`);
       batch.set(outRef, {
         userRef: userDocRef,
@@ -160,7 +174,13 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
         simulatedUtilization: simulatedUtil,  // 0–1
         willBreachUtilization,
         eligibleNow,
+
+        // Original array (keep for debugging / API consumers)
         ineligibilityReasons: reasons,
+
+        // FlutterFlow-friendly top-level fields
+        ...flatReasons,
+
         created_time: serverTs,
       }, { merge: true });
 
@@ -174,12 +194,12 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
 
     if (opCount > 0) await batch.commit();
 
-    // ---------- summary (fixed field name) ----------
+    // ---------- summary ----------
     await db.collection('user_close_actions_list').doc(`summary_${context.auth.uid}`).set({
       userRef: userDocRef,
       currentUtilizationPct: currentUtilization * 100,
       utilizationRulePct: utilPct,
-      closesInLast365,                           // <- use the defined var
+      closesInLast365,
       mostRecentClose: mostRecentClose || null,
       yearlyClosesAllowable,
       minIntervalBetweenClosesDays: minIntervalDays,
@@ -204,7 +224,7 @@ async function clearListForUser(db, userRef) {
     batch.delete(doc.ref);
     n++;
     if (n >= 450) {
-      await batch.commit();   // <- ensure we await each chunk
+      await batch.commit();
       batch = db.batch();
       n = 0;
     }
