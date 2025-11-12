@@ -1,5 +1,6 @@
 //This version includes offerLink so user may apply from app
 // This version includes writing the docID = lender+name+rewardType
+// includes isDenied = false
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
