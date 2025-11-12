@@ -79,8 +79,8 @@ exports.cleanAndWriteUserCardRecs = functions
           ...offer,
           offerLink:  offer.offerLink ?? null,
           userRef,
-          isAccepted: false    // initialize to false so UI shows it
-          // dateAccepted is left untouched if ever set
+          isAccepted: false,   // initialize
+          isDenied: false      // new field added here
         },
         { merge: true }
       );
