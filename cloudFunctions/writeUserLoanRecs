@@ -1,0 +1,115 @@
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+exports.writeUserLoanRecs = functions.region('us-central1').https.onCall(
+  async (data, context) => {
+    if (!context.auth || !context.auth.uid) return;
+
+    const uid = context.auth.uid;
+    const db = admin.firestore();
+    const userRef = db.collection('users').doc(uid);
+
+    // Helper to coerce values safely to numbers
+    const asNum = (v, d = 0) =>
+      typeof v === 'number' && isFinite(v)
+        ? v
+        : (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v)) ? Number(v) : d);
+
+    const userLoanRecsRef = db.collection('user_loan_recommendations');
+    const offersLoansRef  = db.collection('offers_loans');
+
+    // 1) Load existing user loan recs
+    const existingSnap = await userLoanRecsRef.where('userRef', '==', userRef).get();
+    const existingMap = {};
+    existingSnap.docs.forEach(doc => (existingMap[doc.id] = doc.data()));
+    const existingIds = new Set(Object.keys(existingMap));
+
+    // 2) Load all current loan offers
+    const offersSnap = await offersLoansRef.get();
+    const offersById = {};
+    offersSnap.forEach(doc => (offersById[doc.id] = doc.data() || {}));
+    const offerIds = new Set(Object.keys(offersById));
+
+    // 3) Compute creates / deletes / keeps
+    const toCreate = [...offerIds].filter(id => !existingIds.has(id));
+    const toDelete = [...existingIds].filter(id => {
+      const stillOffered = offerIds.has(id);
+      const wasAccepted  = existingMap[id]?.isAccepted === true;
+      return !stillOffered && !wasAccepted;
+    });
+    const toKeep = [...existingIds].filter(id => offerIds.has(id));
+
+    // 4) Prepare ranks (minPrincipal ASC → lender → durationLowMnths → aprLow)
+    const rankOrder = Object.entries(offersById)
+      .map(([id, o]) => ({
+        id,
+        minPrincipal: asNum(o.minPrincipal, Number.POSITIVE_INFINITY),
+        lender: (o.lender || '').toString().toLowerCase(),
+        durationLowMnths: asNum(o.durationLowMnths, Number.POSITIVE_INFINITY),
+        aprLow: asNum(o.aprLow, Number.POSITIVE_INFINITY),
+      }))
+      .sort((a, b) => {
+        if (a.minPrincipal !== b.minPrincipal) return a.minPrincipal - b.minPrincipal;
+        if (a.lender !== b.lender) return a.lender < b.lender ? -1 : 1;
+        if (a.durationLowMnths !== b.durationLowMnths) return a.durationLowMnths - b.durationLowMnths;
+        return a.aprLow - b.aprLow;
+      });
+
+    const rankById = new Map();
+    rankOrder.forEach((row, idx) => rankById.set(row.id, idx + 1));
+
+    // 5) Batch writes
+    const batch = db.batch();
+
+    // Deletes
+    toDelete.forEach(id => batch.delete(userLoanRecsRef.doc(id)));
+
+    // Keeps → update rank + userRef
+    toKeep.forEach(id => {
+      const rank = rankById.get(id);
+      if (rank !== undefined) {
+        batch.set(
+          userLoanRecsRef.doc(id),
+          { userRef, rank: asNum(rank, 0) },
+          { merge: true }
+        );
+      }
+    });
+
+    // Creates → full offer + flags + rank
+    toCreate.forEach(id => {
+      const offer = offersById[id] || {};
+      const rank = rankById.get(id);
+      batch.set(
+        userLoanRecsRef.doc(id),
+        {
+          ...offer,
+          offerLink: offer.offerLink ?? null,
+          minPrincipal: asNum(offer.minPrincipal, null),
+          maxPrincipal: asNum(offer.maxPrincipal, null),
+          aprLow: asNum(offer.aprLow, null),
+          aprHigh: asNum(offer.aprHigh, null),
+          durationLowMnths: asNum(offer.durationLowMnths, null),
+          durationHighMnths: asNum(offer.durationHighMnths, null),
+
+          userRef,
+          isAccepted: false,
+          isDenied: false,  // ← new flag added
+          rank: asNum(rank, 0),
+        },
+        { merge: true }
+      );
+    });
+
+    await batch.commit();
+
+    return {
+      success: true,
+      created: toCreate.length,
+      deleted: toDelete.length,
+      kept: toKeep.length,
+      ranked: rankOrder.length
+    };
+  }
+);
