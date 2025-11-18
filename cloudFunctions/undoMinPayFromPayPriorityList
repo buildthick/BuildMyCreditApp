@@ -1,0 +1,199 @@
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+// ---------- helpers ----------
+const asNum = (v, d = 0) => {
+  if (typeof v === 'number' && isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v))) {
+    return Number(v);
+  }
+  return d;
+};
+
+// Same resolveOrigin mapping used in all PayPriority functions
+function resolveOrigin(payDocData) {
+  const stockType = payDocData.stockType;
+  const origin = payDocData.originDocRef || {};
+
+  switch (stockType) {
+    case 'user_credit_cards':
+      if (!origin.CardsDocRef) return null;
+      return {
+        accountRef: origin.CardsDocRef,
+        balanceField: 'totalBalance',
+        deltaLogCollection: 'user_deltaLog_CC',
+        deltaLogRefField: 'ccRef',
+      };
+
+    case 'user_loans':
+      if (!origin.LoansDocRef) return null;
+      return {
+        accountRef: origin.LoansDocRef,
+        balanceField: 'balance',
+        deltaLogCollection: 'user_deltaLog_Loans',
+        deltaLogRefField: 'loanRef',
+      };
+
+    case 'user_credit_cards_late_payments':
+      if (!origin.CardLatesOrCollectionsDocRef) return null;
+      return {
+        accountRef: origin.CardLatesOrCollectionsDocRef,
+        balanceField: 'amount',
+        deltaLogCollection: 'user_deltaLog_CClates',
+        deltaLogRefField: 'ccLateRef',
+      };
+
+    case 'user_loans_late_payments':
+      if (!origin.LoanLatesOrCollectionsDocRef) return null;
+      return {
+        accountRef: origin.LoanLatesOrCollectionsDocRef,
+        balanceField: 'amount',
+        deltaLogCollection: 'user_deltaLog_LoansLates',
+        deltaLogRefField: 'loanLateRef',
+      };
+
+    case 'user_collections_3rd_party':
+      if (!origin.ThirdPartyCollectionRef) return null;
+      return {
+        accountRef: origin.ThirdPartyCollectionRef,
+        balanceField: 'amount',
+        deltaLogCollection: 'user_deltaLog_3rdPartyCollections',
+        deltaLogRefField: 'thirdPartyCollectionRef',
+      };
+
+    default:
+      return null;
+  }
+}
+
+exports.undoMinPayFromPayPriorityList = functions.region('us-central1').https.onCall(
+  async (data, context) => {
+    if (!context.auth?.uid) {
+      return;
+    }
+
+    const db = admin.firestore();
+    const uid = context.auth.uid;
+    const userRef = db.doc(`users/${uid}`);
+
+    try {
+      // Get all pay-priority docs
+      const ppSnap = await db
+        .collection('user_pay_priority_list')
+        .where('userRef', '==', userRef)
+        .get();
+
+      if (ppSnap.empty) {
+        return {
+          totalPriorityItems: 0,
+          processedItems: 0,
+          undoneAccounts: 0,
+        };
+      }
+
+      let processedItems = 0;
+      let undoneAccounts = 0;
+
+      for (const doc of ppSnap.docs) {
+        processedItems++;
+
+        const payData = doc.data() || {};
+        const originInfo = resolveOrigin(payData);
+        if (!originInfo) continue;
+
+        const {
+          accountRef,
+          balanceField,
+          deltaLogCollection,
+          deltaLogRefField,
+        } = originInfo;
+
+        if (!accountRef || typeof accountRef.path !== 'string') continue;
+
+        // Get latest *normal* delta log entry that changed this balance
+        const deltaSnap = await db
+          .collection(deltaLogCollection)
+          .where('userRef', '==', userRef)
+          .where(deltaLogRefField, '==', accountRef)
+          .where('field_Changed', '==', balanceField)
+          .where('IsChange', '==', true)
+          .orderBy('subs_Version', 'desc')
+          .limit(1)
+          .get();
+
+        if (deltaSnap.empty) continue;
+
+        const deltaDoc = deltaSnap.docs[0];
+        const lastDelta = deltaDoc.data() || {};
+
+        const prevVersion = asNum(lastDelta.prev_Version, 0);
+        const subsVersion = asNum(lastDelta.subs_Version, prevVersion + 1);
+        const previousValue = asNum(lastDelta.previous_Value, NaN);
+
+        if (!Number.isFinite(previousValue)) continue;
+
+        // Undo inside transaction
+        await db.runTransaction(async (tx) => {
+          const accSnap = await tx.get(accountRef);
+          if (!accSnap.exists) return;
+
+          const accData = accSnap.data() || {};
+          const currentBalance = asNum(accData[balanceField], 0);
+          const currentVersion = asNum(accData.liveVersion, 0);
+
+          // Already matching target -> nothing to do
+          if (currentBalance === previousValue) return;
+
+          const newBalance = previousValue;
+
+          let newVersion;
+          if (currentVersion === subsVersion) {
+            // Perfect rollback to previous version
+            newVersion = prevVersion;
+          } else {
+            // Something else changed in between, so bump version forward
+            newVersion = currentVersion + 1;
+          }
+
+          const updateData = {};
+          updateData[balanceField] = newBalance;
+          updateData['liveVersion'] = newVersion;
+
+          tx.update(accountRef, updateData);
+
+          // Write undo delta log, fully detailed like single-doc undo
+          const undoDeltaRef = db.collection(deltaLogCollection).doc();
+          const undoDeltaData = {
+            prev_Version: currentVersion,
+            subs_Version: newVersion,
+            field_Changed: balanceField,
+            previous_Value: currentBalance,      // value BEFORE undo
+            revertedTo_Value: previousValue,     // value AFTER undo
+            userRef: userRef,
+            IsChange: true,
+            IsUndo: true,
+            originalDeltaLogRef: deltaDoc.ref,   // link back to original change
+          };
+          undoDeltaData[deltaLogRefField] = accountRef;
+
+          tx.set(undoDeltaRef, undoDeltaData);
+
+          undoneAccounts++;
+        });
+      }
+
+      return {
+        totalPriorityItems: ppSnap.size,
+        processedItems,
+        undoneAccounts,
+      };
+    } catch (err) {
+      console.error('undoMinPayFromPayPriorityList error:', err);
+      throw new functions.https.HttpsError(
+        'internal',
+        'Failed to undo minimum payments.'
+      );
+    }
+  }
+);
