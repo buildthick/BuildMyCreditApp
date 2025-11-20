@@ -1,7 +1,7 @@
 ## TLDR
 Orchstrator CF writes metadata document under user including cycleID.<br>
-Child CF that create action rec collections take cycleID from CF and add to their writes;<br>
-otherwise, they just run without it.
+Child CF that create action rec collections take cycleID from CF and add to their writes.<br>
+Otherwise, they just run without it.
 
 ## Action Recommendation Cycles: Meta + Actions
 
