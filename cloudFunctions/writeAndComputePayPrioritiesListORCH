@@ -26,16 +26,21 @@ exports.writeAndComputePayPrioritiesListORCH = functions
       return Math.min(180, Math.max(30, raw)); // 30..180
     };
 
-    // ---------- NEW: cycleId (optional, from mother CF) ----------
-    // If present, this CF will tag every output doc with this cycleId.
-    // If absent, no cycle logic at all (testing mode).
+    // ---------- cycleId (optional, from mother CF) ----------
+    // FF will pass data.cycleID (per your stub). We also accept data.cycleId for safety.
     let cycleId = null;
-    if (data && data.cycleId != null) {
-      // Accept string or number, store as string
-      cycleId = typeof data.cycleId === 'string'
-        ? data.cycleId
-        : String(data.cycleId);
+    if (data) {
+      if (data.cycleID != null) {
+        cycleId = typeof data.cycleID === 'string'
+          ? data.cycleID
+          : String(data.cycleID);
+      } else if (data.cycleId != null) {
+        cycleId = typeof data.cycleId === 'string'
+          ? data.cycleId
+          : String(data.cycleId);
+      }
     }
+    // If cycleId is null => standalone/testing mode: no cycle field written.
     // -------------------------------------------------------------
 
     // ---------- Inputs ----------
@@ -334,8 +339,7 @@ exports.writeAndComputePayPrioritiesListORCH = functions
         stockType: x.stockType,
         name: x.name,
         lender: x.lender,
-        // NOTE: cycleId is intentionally NOT included here so
-        // standalone runs don't clobber or rely on it.
+        // NOTE: cycleId intentionally excluded so comparison ignores it.
       };
       if (x.stockType === 'user_credit_cards' || x.stockType === 'user_loans') {
         return {
@@ -406,7 +410,7 @@ exports.writeAndComputePayPrioritiesListORCH = functions
         originDocRef, // DocRefMultiCollection custom object
       };
 
-      let newDataCore; // NEW: core fields excluding cycleId
+      let newDataCore;
 
       if (i.kind === 'account') {
         const breakdown =
@@ -460,15 +464,15 @@ exports.writeAndComputePayPrioritiesListORCH = functions
 
       const prevRelevant = existingMap[i.id];
 
-      // Compare only on core fields (no cycleId) so:
-      // - Standalone runs don't care about cycleId
-      // - Mother runs can still force cycleId onto docs even if core fields match
+      // Compare only core fields (no cycleId) so:
+      // - standalone runs don't care about cycleId
+      // - mother runs can still stamp cycleId on docs even if core unchanged
       const coreChanged = !prevRelevant || JSON.stringify(prevRelevant) !== JSON.stringify(newDataCore);
 
       if (coreChanged || cycleId) {
         const payload = { ...newDataCore };
         if (cycleId) {
-          payload.cycleId = cycleId; // NEW: unified cycle tag from mother CF
+          payload.cycleId = cycleId;
         }
         batch.set(docRef, payload, { merge: true });
       }
