@@ -156,6 +156,7 @@ exports.writeAndComputePayPrioritiesList = functions
         dueDay,
         isAnnualFee,
         isCFA,
+        isCollectionFromAccount: false,  // NEW: never a collection for base accounts
         alloc_total: 0,
         alloc_min: 0,
         alloc_card_extra: 0,
@@ -183,6 +184,7 @@ exports.writeAndComputePayPrioritiesList = functions
         sourceRef: L.ref,
         severity,
         amount,
+        isCollectionFromAccount: sentToCollections, // NEW: mark account-origin collections
         alloc_total: 0,
         alloc_late: 0,
         alloc_collections: 0,
@@ -199,21 +201,22 @@ exports.writeAndComputePayPrioritiesList = functions
         lender: C.collectionsAgency ?? null,
         sourceRef: C.ref,
         amount: asNum(C.amount, 0),
+        isCollectionFromAccount: false, // NEW: not from a late; pure 3rd-party
         alloc_total: 0,
         alloc_collections: 0,
       });
     });
 
-    // ---------- NEW: minimumPreservationBudget (accounts' mins + unpaid lates, no collections) ----------
+    // ---------- minimumPreservationBudget (accounts' mins + unpaid lates, no collections) ----------
     const accounts = items.filter(i => i.kind === 'account');
     const totalMinAccounts = accounts.reduce((s,i) => s + i.minPayment, 0);
     const totalUnpaidLates = items.filter(i => i.kind === 'late').reduce((s,i) => s + i.amount, 0);
-    const minimumPreservationBudget = Number((totalMinAccounts + totalUnpaidLates).toFixed(2)); // ← NEW
+    const minimumPreservationBudget = Number((totalMinAccounts + totalUnpaidLates).toFixed(2));
 
     // ---------- Allocation ----------
 
     // 1) Minimum monthly payments (cards + loans)
-    const totalMin = totalMinAccounts; // reuse computed sum
+    const totalMin = totalMinAccounts;
 
     if (budgetLeft > 0) {
       if (budgetLeft >= totalMin) {
@@ -321,6 +324,10 @@ exports.writeAndComputePayPrioritiesList = functions
         budgetLeft -= pay;
       });
 
+    // ---------- Totals for header-style fields ----------
+    const availableRemainder = Number(budgetLeft.toFixed(2));
+    const totalAllocated = Number((monthlyBudget - availableRemainder).toFixed(2));
+
     // ---------- Persist (delta-aware; write only new/changed) ----------
     const priorityKey = (i) => (
       i.kind === 'account' && i.alloc_min > 0 ? 1 :
@@ -346,7 +353,9 @@ exports.writeAndComputePayPrioritiesList = functions
         rank: x.rank,
         monthlyBudget: x.monthlyBudget,
         availableRemainder: x.availableRemainder,
-        minimumPreservationBudget: x.minimumPreservationBudget, // ← NEW
+        totalAllocated: x.totalAllocated,
+        minimumPreservationBudget: x.minimumPreservationBudget,
+        isCollectionFromAccount: !!x.isCollectionFromAccount,  // NEW in comparison
         stockType: x.stockType,
         name: x.name,
         lender: x.lender,
@@ -413,8 +422,10 @@ exports.writeAndComputePayPrioritiesList = functions
         userRef,
         rank: idx + 1,
         monthlyBudget,
-        availableRemainder: Number(budgetLeft.toFixed(2)),
-        minimumPreservationBudget, // ← NEW
+        availableRemainder,
+        totalAllocated,
+        minimumPreservationBudget,
+        isCollectionFromAccount: !!i.isCollectionFromAccount,  // NEW: persisted on every doc
         originDocRef, // DocRefMultiCollection custom object
       };
 
@@ -480,7 +491,8 @@ exports.writeAndComputePayPrioritiesList = functions
     return {
       success: true,
       count: items.length,
-      availableRemainder: Number(budgetLeft.toFixed(2)),
-      minimumPreservationBudget // ← NEW
+      availableRemainder,
+      totalAllocated,
+      minimumPreservationBudget
     };
   });
