@@ -1,6 +1,6 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-// To avoid deployment errors, do not call admin.initializeApp() in your code
+// FF initializes admin
 
 // ---------- helpers ----------
 const asNum = (v, d = 0) => {
@@ -11,7 +11,7 @@ const asNum = (v, d = 0) => {
   return d;
 };
 
-// Same resolveOrigin mapping used in all PayPriority functions
+// Same origin resolver used in apply CF
 function resolveOrigin(payDocData) {
   const stockType = payDocData.stockType;
   const origin = payDocData.originDocRef || {};
@@ -67,10 +67,14 @@ function resolveOrigin(payDocData) {
   }
 }
 
-exports.undoMinPayFromPayPriorityList = functions.region('us-central1').https.onCall(
-  async (data, context) => {
+exports.undoMinPayFromPayPriorityList = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
     if (!context.auth?.uid) {
-      return;
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'Must be signed in.'
+      );
     }
 
     const db = admin.firestore();
@@ -78,7 +82,7 @@ exports.undoMinPayFromPayPriorityList = functions.region('us-central1').https.on
     const userRef = db.doc(`users/${uid}`);
 
     try {
-      // Get all pay-priority docs
+      // Fetch user pay priority list
       const ppSnap = await db
         .collection('user_pay_priority_list')
         .where('userRef', '==', userRef)
@@ -111,29 +115,56 @@ exports.undoMinPayFromPayPriorityList = functions.region('us-central1').https.on
 
         if (!accountRef || typeof accountRef.path !== 'string') continue;
 
-        // Get latest *normal* delta log entry that changed this balance
-        const deltaSnap = await db
+        // 1️⃣ Find the most recent OAAA delta for this account/field
+        const latestOAAASnap = await db
           .collection(deltaLogCollection)
           .where('userRef', '==', userRef)
           .where(deltaLogRefField, '==', accountRef)
           .where('field_Changed', '==', balanceField)
           .where('IsChange', '==', true)
+          .where('IsUndo', '==', false)
+          .where('actionScope', '==', 'OAAA')
           .orderBy('subs_Version', 'desc')
           .limit(1)
           .get();
 
-        if (deltaSnap.empty) continue;
+        if (latestOAAASnap.empty) continue;
 
-        const deltaDoc = deltaSnap.docs[0];
-        const lastDelta = deltaDoc.data() || {};
+        const oaaaDeltaDoc = latestOAAASnap.docs[0];
+        const oaaaData = oaaaDeltaDoc.data() || {};
 
-        const prevVersion = asNum(lastDelta.prev_Version, 0);
-        const subsVersion = asNum(lastDelta.subs_Version, prevVersion + 1);
-        const previousValue = asNum(lastDelta.previous_Value, NaN);
+        const prevVersionBeforeOAAA = asNum(oaaaData.prev_Version, 0);
+        const subsVersionOAAA = asNum(oaaaData.subs_Version, prevVersionBeforeOAAA + 1);
+        const valueBeforeOAAA = asNum(oaaaData.previous_Value, NaN);
+        const cycleId = oaaaData.cycleId || null;
+        const actionScope = oaaaData.actionScope || 'OAAA';
 
-        if (!Number.isFinite(previousValue)) continue;
+        if (!Number.isFinite(valueBeforeOAAA)) continue;
 
-        // Undo inside transaction
+        // 2️⃣ Find the first delta AFTER OAAA whose prev_Version == subs_Version(OAAA)
+        //    This gives us the value *after* OAAA (its "new" value).
+        const nextSnap = await db
+          .collection(deltaLogCollection)
+          .where('userRef', '==', userRef)
+          .where(deltaLogRefField, '==', accountRef)
+          .where('field_Changed', '==', balanceField)
+          .where('IsChange', '==', true)
+          .where('IsUndo', '==', false)
+          .where('prev_Version', '==', subsVersionOAAA)
+          .orderBy('subs_Version', 'asc')
+          .limit(1)
+          .get();
+
+        // We'll pass this into the transaction via closure.
+        let newValueAfterOAAA = null;
+        if (!nextSnap.empty) {
+          const nextData = nextSnap.docs[0].data() || {};
+          newValueAfterOAAA = asNum(nextData.previous_Value, NaN);
+          if (!Number.isFinite(newValueAfterOAAA)) {
+            newValueAfterOAAA = null;
+          }
+        }
+
         await db.runTransaction(async (tx) => {
           const accSnap = await tx.get(accountRef);
           if (!accSnap.exists) return;
@@ -142,38 +173,61 @@ exports.undoMinPayFromPayPriorityList = functions.region('us-central1').https.on
           const currentBalance = asNum(accData[balanceField], 0);
           const currentVersion = asNum(accData.liveVersion, 0);
 
-          // Already matching target -> nothing to do
-          if (currentBalance === previousValue) return;
+          // If we couldn't infer the "after OAAA" value from logs,
+          // assume the account's current balance is the value after OAAA.
+          const inferredAfterOAAA =
+            newValueAfterOAAA != null ? newValueAfterOAAA : currentBalance;
 
-          const newBalance = previousValue;
+          // Effect of OAAA on the account at the time it was applied:
+          // effect = value_after_OAAA - value_before_OAAA
+          // Example: 1000 -> 900  => effect = -100
+          const effectOfOAAA = inferredAfterOAAA - valueBeforeOAAA;
 
-          let newVersion;
-          if (currentVersion === subsVersion) {
-            // Perfect rollback to previous version
-            newVersion = prevVersion;
-          } else {
-            // Something else changed in between, so bump version forward
-            newVersion = currentVersion + 1;
-          }
+          // If effect is zero, nothing to undo
+          if (effectOfOAAA === 0) return;
 
+          // To remove only OAAA's contribution, we subtract its effect from current:
+          // newBalance = currentBalance - effectOfOAAA
+          //
+          // Example:
+          //   V0: 1000
+          //   OAAA -> 900 (effect -100)
+          //   OAOA -> 800
+          //   Undo OAAA: newBalance = 800 - (-100) = 900  (OAOA preserved)
+          const newBalance = currentBalance - effectOfOAAA;
+
+          if (newBalance === currentBalance) return;
+
+          const newVersion = currentVersion + 1;
+
+          // Update origin doc
           const updateData = {};
           updateData[balanceField] = newBalance;
           updateData['liveVersion'] = newVersion;
-
           tx.update(accountRef, updateData);
 
-          // Write undo delta log, fully detailed like single-doc undo
+          // 3️⃣ Write an UNDO delta with lineage + cycleId + actionScope
           const undoDeltaRef = db.collection(deltaLogCollection).doc();
           const undoDeltaData = {
             prev_Version: currentVersion,
             subs_Version: newVersion,
             field_Changed: balanceField,
-            previous_Value: currentBalance,      // value BEFORE undo
-            revertedTo_Value: previousValue,     // value AFTER undo
+
+            previous_Value: currentBalance,   // before undo
+            revertedTo_Value: newBalance,     // after undo
+
             userRef: userRef,
             IsChange: true,
             IsUndo: true,
-            originalDeltaLogRef: deltaDoc.ref,   // link back to original change
+
+            // link this undo to the original OAAA delta
+            originalDeltaLogRef: oaaaDeltaDoc.ref,
+
+            // keep cycle + scope for lineage
+            cycleId,
+            actionScope,
+
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
           };
           undoDeltaData[deltaLogRefField] = accountRef;
 
@@ -188,6 +242,7 @@ exports.undoMinPayFromPayPriorityList = functions.region('us-central1').https.on
         processedItems,
         undoneAccounts,
       };
+
     } catch (err) {
       console.error('undoMinPayFromPayPriorityList error:', err);
       throw new functions.https.HttpsError(
@@ -195,5 +250,4 @@ exports.undoMinPayFromPayPriorityList = functions.region('us-central1').https.on
         'Failed to undo minimum payments.'
       );
     }
-  }
-);
+  });
