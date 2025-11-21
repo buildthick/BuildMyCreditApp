@@ -255,6 +255,7 @@ exports.applySingleDocPayFromPayPriorityList = functions
           subs_Version: newVersion,
           field_Changed: balanceField,
           previous_Value: oldBalance,
+          amountChanged: payment, // 👈 NEW: explicit delta
 
           // origin linkage
           [deltaLogRefField]: accountRef,
