@@ -32,22 +32,27 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
         minIntervalBetweenClosesDays: null,
         closableNowCount: 0,
 
-        isSummaryDoc: true, // ← ADDED
+        // timing summary fields when there are no candidates
+        remainingClosesYearWindow: 0,
+        maxCardsClosableNowByInterval: 0,
+        maxCardsClosableNowByTiming: 0,
+
+        isSummaryDoc: true,
 
         created_time: serverTs,
       }, { merge: true });
       return { candidates: 0, closableNowCount: 0 };
     }
 
-    // ---------- load adjustments (Close rules) ----------
+    // ---------- load adjustments ----------
     const adjSnap = await db.collection('user_openAndCloseAdjustments')
       .where('userRef', '==', userDocRef)
       .where('Action_Type', '==', 'Close')
       .get();
 
-    let utilPct = null;                 
-    let yearlyClosesAllowable = null;   
-    let minIntervalMonths = null;       
+    let utilPct = null;
+    let yearlyClosesAllowable = null;
+    let minIntervalMonths = null;
 
     adjSnap.forEach(d => {
       const x = d.data() || {};
@@ -71,7 +76,7 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
     const utilThreshold = utilPct / 100;
     const minIntervalDays = monthsToDays(minIntervalMonths);
 
-    // ---------- open cards for current utilization ----------
+    // ---------- open cards for utilization ----------
     const openCardsSnap = await db.collection('user_credit_cards')
       .where('userRef', '==', userDocRef)
       .where('isOpen', '==', true)
@@ -85,7 +90,7 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
     });
     const currentUtilization = sumLimit > 0 ? (sumBal / sumLimit) : 0;
 
-    // ---------- closure history in last 365 days ----------
+    // ---------- closure history ----------
     const now = new Date();
     const cutoff = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
 
@@ -106,17 +111,39 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
     });
 
     const daysSinceMostRecentClose = mostRecentClose ? daysBetween(now, mostRecentClose) : Infinity;
-    let remainingCloses = Math.max(0, yearlyClosesAllowable - closesInLast365);
 
-    // ---------- sort candidates by rank ----------
+    // ----- timing constraints summary values -----
+    let remainingCloses = Math.max(0, yearlyClosesAllowable - closesInLast365);
+    const remainingClosesYearWindow = remainingCloses;
+
+    let maxCardsClosableNowByInterval;
+    if (minIntervalDays <= 0) {
+      // No interval constraint: interval allows as many as the year rule
+      maxCardsClosableNowByInterval = remainingClosesYearWindow;
+    } else {
+      if (!Number.isFinite(daysSinceMostRecentClose)) {
+        // No prior closes: interval satisfied, but we still limit to 1 at a time
+        maxCardsClosableNowByInterval = remainingClosesYearWindow > 0 ? 1 : 0;
+      } else if (daysSinceMostRecentClose < minIntervalDays) {
+        // Still in cooldown window: cannot close anything now
+        maxCardsClosableNowByInterval = 0;
+      } else {
+        // Interval satisfied and at least one close allowed this year: allow 1 now
+        maxCardsClosableNowByInterval = remainingClosesYearWindow > 0 ? 1 : 0;
+      }
+    }
+
+    const maxCardsClosableNowByTiming = Math.min(remainingClosesYearWindow, maxCardsClosableNowByInterval);
+
+    // ---------- sort candidates ----------
     const candidates = candSnap.docs
       .map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => asNum(a.rank, 999999) - asNum(b.rank, 999999));
 
-    // ---------- clear previous output ----------
+    // ---------- clear previous ----------
     await clearListForUser(db, userDocRef);
 
-    // ---------- evaluate ----------
+    // ---------- evaluate candidates ----------
     let closableNowCount = 0;
     let batch = db.batch();
     let opCount = 0;
@@ -130,6 +157,10 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
       const limit = asNum(card.creditLimit, 0);
       const lender = card.lender || cand.lender || '';
       const reasons = [];
+
+      // flags from card/candidate
+      const isCFA = (card.isCFA !== undefined ? card.isCFA : (cand.isCFA || false));
+      const isAnnualFee = (card.isAnnualFee !== undefined ? card.isAnnualFee : (cand.isAnnualFee || false));
 
       if (balance > 0) reasons.push('balance_gt_0');
 
@@ -152,7 +183,7 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
         sumBal   = newSumBal;
       }
 
-      // ----- FlutterFlow-friendly flattening for reasons -----
+      // ----- flatten reasons for FlutterFlow -----
       const numIneligibilityReasons = reasons.length;
       const flatReasons = { numIneligibilityReasons };
 
@@ -172,6 +203,10 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
         lender,
         creditLimit: limit,
         totalBalance: balance,
+
+        isCFA,
+        isAnnualFee,
+
         simulatedUtilization: simulatedUtil,
         willBreachUtilization,
         eligibleNow,
@@ -179,7 +214,10 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
         ineligibilityReasons: reasons,
         ...flatReasons,
 
-        isSummaryDoc: false, // ← ADDED
+        isSummaryDoc: false,
+
+        // for UI: will be set to true when user accepts this close rec
+        closeAccepted: false,
 
         created_time: serverTs,
       }, { merge: true });
@@ -205,7 +243,11 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
       minIntervalBetweenClosesDays: minIntervalDays,
       closableNowCount,
 
-      isSummaryDoc: true, // ← ADDED
+      remainingClosesYearWindow,
+      maxCardsClosableNowByInterval,
+      maxCardsClosableNowByTiming,
+
+      isSummaryDoc: true,
 
       created_time: serverTs,
     }, { merge: true });
