@@ -31,6 +31,9 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
         yearlyClosesAllowable: null,
         minIntervalBetweenClosesDays: null,
         closableNowCount: 0,
+
+        isSummaryDoc: true, // ← ADDED
+
         created_time: serverTs,
       }, { merge: true });
       return { candidates: 0, closableNowCount: 0 };
@@ -42,9 +45,9 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
       .where('Action_Type', '==', 'Close')
       .get();
 
-    let utilPct = null;                 // e.g., 30
-    let yearlyClosesAllowable = null;   // e.g., 6
-    let minIntervalMonths = null;       // e.g., 3
+    let utilPct = null;                 
+    let yearlyClosesAllowable = null;   
+    let minIntervalMonths = null;       
 
     adjSnap.forEach(d => {
       const x = d.data() || {};
@@ -153,12 +156,10 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
       const numIneligibilityReasons = reasons.length;
       const flatReasons = { numIneligibilityReasons };
 
-      // Fill sequential fields (1-based)
       reasons.forEach((r, i) => {
         flatReasons[`ineligibilityReasons${i + 1}`] = r;
       });
 
-      // Clear any stale reason fields up to a safe cap (e.g., 8)
       for (let i = reasons.length + 1; i <= 8; i++) {
         flatReasons[`ineligibilityReasons${i}`] = admin.firestore.FieldValue.delete();
       }
@@ -171,15 +172,14 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
         lender,
         creditLimit: limit,
         totalBalance: balance,
-        simulatedUtilization: simulatedUtil,  // 0–1
+        simulatedUtilization: simulatedUtil,
         willBreachUtilization,
         eligibleNow,
 
-        // Original array (keep for debugging / API consumers)
         ineligibilityReasons: reasons,
-
-        // FlutterFlow-friendly top-level fields
         ...flatReasons,
+
+        isSummaryDoc: false, // ← ADDED
 
         created_time: serverTs,
       }, { merge: true });
@@ -204,6 +204,9 @@ exports.writeCloseActionsList = functions.region('us-central1').https.onCall(
       yearlyClosesAllowable,
       minIntervalBetweenClosesDays: minIntervalDays,
       closableNowCount,
+
+      isSummaryDoc: true, // ← ADDED
+
       created_time: serverTs,
     }, { merge: true });
 
