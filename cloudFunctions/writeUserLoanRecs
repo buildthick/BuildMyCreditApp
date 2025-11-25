@@ -1,6 +1,29 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-// To avoid deployment errors, do not call admin.initializeApp() in your code
+const crypto = require('crypto');
+// Do NOT call admin.initializeApp() here (initialized elsewhere)
+
+// ---------- helpers ----------
+const canonicalize = (obj) => {
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (typeof obj.toDate === 'function') return obj.toDate().toISOString(); // Timestamp
+  if (obj && typeof obj.path === 'string') return obj.path;                // DocRef
+  if (Array.isArray(obj)) return obj.map(canonicalize);
+  const out = {};
+  Object.keys(obj)
+    .filter(k => obj[k] !== undefined)
+    .sort()
+    .forEach(k => { out[k] = canonicalize(obj[k]); });
+  return out;
+};
+
+const hashPayload = (obj) =>
+  crypto.createHash('sha256').update(JSON.stringify(canonicalize(obj))).digest('hex');
+
+const asNum = (v, d = null) =>
+  (typeof v === 'number' && isFinite(v))
+    ? v
+    : (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v)) ? Number(v) : d);
 
 exports.writeUserLoanRecs = functions.region('us-central1').https.onCall(
   async (data, context) => {
@@ -8,13 +31,8 @@ exports.writeUserLoanRecs = functions.region('us-central1').https.onCall(
 
     const uid = context.auth.uid;
     const db = admin.firestore();
+    const serverTs = admin.firestore.FieldValue.serverTimestamp();
     const userRef = db.collection('users').doc(uid);
-
-    // Helper to coerce values safely to numbers
-    const asNum = (v, d = 0) =>
-      typeof v === 'number' && isFinite(v)
-        ? v
-        : (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v)) ? Number(v) : d);
 
     const userLoanRecsRef = db.collection('user_loan_recommendations');
     const offersLoansRef  = db.collection('offers_loans');
@@ -22,25 +40,42 @@ exports.writeUserLoanRecs = functions.region('us-central1').https.onCall(
     // 1) Load existing user loan recs
     const existingSnap = await userLoanRecsRef.where('userRef', '==', userRef).get();
     const existingMap = {};
-    existingSnap.docs.forEach(doc => (existingMap[doc.id] = doc.data()));
+    existingSnap.docs.forEach(doc => { existingMap[doc.id] = doc.data() || {}; });
     const existingIds = new Set(Object.keys(existingMap));
 
     // 2) Load all current loan offers
     const offersSnap = await offersLoansRef.get();
     const offersById = {};
-    offersSnap.forEach(doc => (offersById[doc.id] = doc.data() || {}));
+    offersSnap.forEach(doc => { offersById[doc.id] = doc.data() || {}; });
     const offerIds = new Set(Object.keys(offersById));
 
-    // 3) Compute creates / deletes / keeps
-    const toCreate = [...offerIds].filter(id => !existingIds.has(id));
-    const toDelete = [...existingIds].filter(id => {
-      const stillOffered = offerIds.has(id);
-      const wasAccepted  = existingMap[id]?.isAccepted === true;
-      return !stillOffered && !wasAccepted;
-    });
-    const toKeep = [...existingIds].filter(id => offerIds.has(id));
+    // 3) Build desired payloads + hashes from offers (only fields we care to mirror)
+    const desiredById = {};
+    const desiredHashById = {};
+    for (const [id, o] of Object.entries(offersById)) {
+      const desired = {
+        lender: o.lender ?? null,
+        productName: o.productName ?? null,     // if present in schema
+        offerLink: o.offerLink ?? null,
 
-    // 4) Prepare ranks (minPrincipal ASC → lender → durationLowMnths → aprLow)
+        minPrincipal: asNum(o.minPrincipal, null),
+        maxPrincipal: asNum(o.maxPrincipal, null),
+
+        aprLow:  asNum(o.aprLow,  null),
+        aprHigh: asNum(o.aprHigh, null),
+
+        durationLowMnths:  asNum(o.durationLowMnths,  null),
+        durationHighMnths: asNum(o.durationHighMnths, null),
+
+        // add other UI-needed fields here, keeping nulls explicit for stable hash
+        feesOrigination: asNum(o.feesOrigination, null),
+        notes: o.notes ?? null,
+      };
+      desiredById[id] = desired;
+      desiredHashById[id] = hashPayload(desired);
+    }
+
+    // 4) Compute rank order (minPrincipal ASC → lender A→Z → durationLowMnths ASC → aprLow ASC)
     const rankOrder = Object.entries(offersById)
       .map(([id, o]) => ({
         id,
@@ -57,49 +92,73 @@ exports.writeUserLoanRecs = functions.region('us-central1').https.onCall(
       });
 
     const rankById = new Map();
-    rankOrder.forEach((row, idx) => rankById.set(row.id, idx + 1));
+    rankOrder.forEach((row, idx) => rankById.set(row.id, idx + 1)); // 1-based
 
-    // 5) Batch writes
+    // 5) Figure out creates / deletes / keeps
+    const toCreate = [...offerIds].filter(id => !existingIds.has(id));
+    const toDelete = [...existingIds].filter(id => {
+      const stillOffered = offerIds.has(id);
+      const wasAccepted  = existingMap[id]?.isAccepted === true;
+      return !stillOffered && !wasAccepted; // keep accepted ones even if upstream removed
+    });
+    const toKeep = [...existingIds].filter(id => offerIds.has(id));
+
+    // 6) For keeps, detect payload changes via hash and rank changes
+    const toUpdate = [];
+    for (const id of toKeep) {
+      const existing = existingMap[id] || {};
+      const prevHash = existing.sourceHash || null;
+      const nextHash = desiredHashById[id];
+      const needsOfferUpdate = prevHash !== nextHash;
+
+      const newRank = rankById.get(id) || null;
+      const oldRank = (typeof existing.rank === 'number' && isFinite(existing.rank)) ? existing.rank : null;
+      const needsRankUpdate = newRank !== null && newRank !== oldRank;
+
+      const missingUserRef = !existing.userRef;
+
+      if (needsOfferUpdate || needsRankUpdate || missingUserRef) {
+        toUpdate.push({ id, needsOfferUpdate, needsRankUpdate, missingUserRef, nextHash, newRank });
+      }
+    }
+
+    // 7) Batch writes: delete stale, create new, update changed
     const batch = db.batch();
 
     // Deletes
     toDelete.forEach(id => batch.delete(userLoanRecsRef.doc(id)));
 
-    // Keeps → update rank + userRef
-    toKeep.forEach(id => {
-      const rank = rankById.get(id);
-      if (rank !== undefined) {
-        batch.set(
-          userLoanRecsRef.doc(id),
-          { userRef, rank: asNum(rank, 0) },
-          { merge: true }
-        );
-      }
-    });
-
-    // Creates → full offer + flags + rank
+    // Creates (full payload + flags + rank + hash)
     toCreate.forEach(id => {
-      const offer = offersById[id] || {};
-      const rank = rankById.get(id);
+      const desired = desiredById[id];
+      const sourceHash = desiredHashById[id];
+      const rank = rankById.get(id) || 0;
       batch.set(
         userLoanRecsRef.doc(id),
         {
-          ...offer,
-          offerLink: offer.offerLink ?? null,
-          minPrincipal: asNum(offer.minPrincipal, null),
-          maxPrincipal: asNum(offer.maxPrincipal, null),
-          aprLow: asNum(offer.aprLow, null),
-          aprHigh: asNum(offer.aprHigh, null),
-          durationLowMnths: asNum(offer.durationLowMnths, null),
-          durationHighMnths: asNum(offer.durationHighMnths, null),
-
+          ...desired,
+          sourceHash,
           userRef,
           isAccepted: false,
-          isDenied: false,  // ← new flag added
-          rank: asNum(rank, 0),
+          isDenied:   false,
+          rank,
+          createdAt: serverTs,
+          updatedAt: serverTs,
         },
         { merge: true }
       );
+    });
+
+    // Updates (only changed fields; preserve isAccepted/isDenied)
+    toUpdate.forEach(({ id, needsOfferUpdate, needsRankUpdate, missingUserRef, nextHash, newRank }) => {
+      const patch = { updatedAt: serverTs };
+      if (missingUserRef) patch.userRef = userRef;
+      if (needsOfferUpdate) {
+        Object.assign(patch, { ...desiredById[id], sourceHash: nextHash });
+      }
+      if (needsRankUpdate) patch.rank = newRank || 0;
+
+      batch.set(userLoanRecsRef.doc(id), patch, { merge: true });
     });
 
     await batch.commit();
@@ -109,6 +168,7 @@ exports.writeUserLoanRecs = functions.region('us-central1').https.onCall(
       created: toCreate.length,
       deleted: toDelete.length,
       kept: toKeep.length,
+      updated: toUpdate.length,
       ranked: rankOrder.length
     };
   }
