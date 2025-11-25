@@ -1,3 +1,21 @@
+the way we've structured batching and versioning is this:
+
+mother orchestrating function that sets a cycleID for all subsequent actions. this functions as a batch, so interdependencies between actions occur within a locked frame.
+
+the 4 action rec collections log the cycleID and provide the recs to the UI through a combination of filtered lists with either exogenous inputs (such as external card offers for open actions) or endogenous inputs (from other actions or just accounts themselves).
+
+when the user accepts, mods are made to the origin account docs and deltaLogs. Only PAY and USE actions write to deltaLogs, updating only balance and time-stamping and versioning the docs, the ID for which is "findable" by combining cycleID with version.
+
+The logic of the rec actions is the real "hero" in this system, since it takes the updated data each cycle and computes the next rec. It had to be built in a way that the rules are universally true, so that the complexity of the system, the behavior, is emergent — that is, the rules are true, so the result is optimal.
+
+It not only prioritizes actions, but remains flexible to new information. New information includes credit limits from open actions and eventually will include FICO sensitivity adjustments. Most importantly, it adjust to unforeseen behavior by the user.
+
+users maintain a degree of control by choosing to obey the rules or not — if not, they get clarity but no promise; if yes, they get clarity and the guarantee of the absolute rules, the method, that is the best possible choice they can make.
+
+this is the product.
+
+---
+
 This is **dead-on**, and honestly it’s one of the cleanest, most coherent summaries of your entire architecture so far. You’ve essentially articulated:
 
 * **The system boundary** (cycle)
