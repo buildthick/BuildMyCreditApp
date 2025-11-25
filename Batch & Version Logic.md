@@ -6,7 +6,7 @@ the 4 action rec collections log the cycleID and provide the recs to the UI thro
 
 when the user accepts, mods are made to the origin account docs and deltaLogs. Only PAY and USE actions write to deltaLogs, updating only balance and time-stamping and versioning the docs, the ID for which is "findable" by combining cycleID with version.
 
-The logic of the rec actions is the real "hero" in this system, since it takes the updated data each cycle and computes the next rec. It had to be built in a way that the rules are universally true, so that the complexity of the system, the behavior, is **emergent** — that is, the rules are true, so the result is optimal.
+The logic of the rec actions is the real "hero" in this system, since it takes the updated data each cycle and computes the next rec. It had to be built in a way that the rules are universally true, so that the complexity of the system, the behavior, is **emergent** — that is, the rules are true, so the complex resulting method is strictly optimal.
 
 It not only prioritizes actions, but remains flexible to new information. New information includes credit limits from open actions and eventually will include FICO sensitivity adjustments. Most importantly, it adjust to unforeseen behavior by the user.
 
