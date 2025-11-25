@@ -12,22 +12,19 @@ exports.computeCreditMixMetrics = functions.region('us-central1').https.onCall(
     const uid = context.auth.uid;
     const userRef = db.doc(`users/${uid}`);
 
-    // 1) Pull consolidated stocks for this user (top-level, filtered by userRef)
+    // 1) Pull consolidated stocks for this user
     const consoSnap = await db
       .collection('user_stocks_conso')
       .where('userRef', '==', userRef)
       .get();
 
     // 2) Count credit-mix buckets (open + closed)
-    // Revolving: credit cards + HELOCs
-    // Installment: loans
     let numRevolving = 0;
     let numInstallment = 0;
 
     consoSnap.forEach(doc => {
       const d = doc.data();
       const stock = d?.stock;
-
       if (!stock) return;
 
       // Exclude non-account stocks
@@ -40,28 +37,30 @@ exports.computeCreditMixMetrics = functions.region('us-central1').https.onCall(
       }
 
       if (stock === 'user_credit_cards' || stock === 'user_HELOCs') {
-        numRevolving += 1;
+        numRevolving += 1;           // Revolving
       } else if (stock === 'user_loans') {
-        numInstallment += 1;
+        numInstallment += 1;         // Installment
+      } else {
+        // Unknown type -> ignore
       }
-      // Unknown stock types are ignored by default
     });
 
-    const totalOpenAccounts = numRevolving + numInstallment;
+    const totalAccounts = numRevolving + numInstallment;
     const toPct4 = (v, tot) => (tot > 0 ? Math.round((v / tot) * 1e4) / 1e4 : 0);
 
-    const next = {
+    // Prepare Firestore document body (OK to include DocRef here)
+    const writeBody = {
       userRef,
-      totalOpenAccounts,
+      totalAccounts,
       numRevolving,
       numInstallment,
-      pctRevolving: toPct4(numRevolving, totalOpenAccounts),
-      pctInstallment: toPct4(numInstallment, totalOpenAccounts),
+      pctRevolving: toPct4(numRevolving, totalAccounts),
+      pctInstallment: toPct4(numInstallment, totalAccounts),
       updated_time: admin.firestore.FieldValue.serverTimestamp(),
       source: 'user_stocks_conso@allAccounts'
     };
 
-    // 3) Idempotent write: only if the computed values changed
+    // 3) Idempotent write
     const outRef = db.collection('user_metricsCreditMix').doc(uid);
     const prevSnap = await outRef.get();
     let changed = true;
@@ -69,18 +68,33 @@ exports.computeCreditMixMetrics = functions.region('us-central1').https.onCall(
     if (prevSnap.exists) {
       const p = prevSnap.data() || {};
       changed =
-        p.totalOpenAccounts !== next.totalOpenAccounts ||
-        p.numRevolving !== next.numRevolving ||
-        p.numInstallment !== next.numInstallment ||
-        p.pctRevolving !== next.pctRevolving ||
-        p.pctInstallment !== next.pctInstallment;
+        p.totalAccounts !== writeBody.totalAccounts ||
+        p.numRevolving !== writeBody.numRevolving ||
+        p.numInstallment !== writeBody.numInstallment ||
+        p.pctRevolving !== writeBody.pctRevolving ||
+        p.pctInstallment !== writeBody.pctInstallment;
     }
 
     if (!changed) {
-      return { status: 'noop', message: 'No changes detected.' };
+      return {
+        status: 'noop',
+        totalAccounts,
+        numRevolving,
+        numInstallment,
+        pctRevolving: writeBody.pctRevolving,
+        pctInstallment: writeBody.pctInstallment
+      };
     }
 
-    await outRef.set(next, { merge: true });
-    return { status: 'ok', metrics: next };
+    await outRef.set(writeBody, { merge: true });
+
+    return {
+      status: 'ok',
+      totalAccounts,
+      numRevolving,
+      numInstallment,
+      pctRevolving: writeBody.pctRevolving,
+      pctInstallment: writeBody.pctInstallment
+    };
   }
 );
