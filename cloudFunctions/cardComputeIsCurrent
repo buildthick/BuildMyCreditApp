@@ -1,81 +1,50 @@
-// Field calcualted in this function:
-// `isCurrent`
-
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 // To avoid deployment errors, do not call admin.initializeApp() in your code
 
-exports.cardComputeIsCurrent = functions
+exports.cardComputeMinPymt = functions
   .region('us-central1')
   .firestore
-  .document('user_credit_cards_late_payments/{latePaymentId}')
+  .document('user_credit_cards/{cardId}')
   .onWrite(async (change, context) => {
     const beforeData = change.before.exists ? change.before.data() : null;
     const afterData  = change.after.exists  ? change.after.data()  : null;
 
-    // Exit if the doc was deleted
+    // If the doc was deleted, bail
     if (!afterData) {
-      console.log(`cardComputeIsCurrent: deleted, skipping ${context.params.latePaymentId}`);
+      console.log(`cardComputeMinPymt: deleted, skipping ${context.params.cardId}`);
       return null;
     }
 
-    // Only run on create or when isPaid actually changes
-    const oldPaid = beforeData?.isPaid;
-    const newPaid = afterData.isPaid;
-    if (beforeData && oldPaid === newPaid) {
-      console.log(
-        `cardComputeIsCurrent: isPaid unchanged (${newPaid}) on ${context.params.latePaymentId}, skipping`
-      );
+    const oldBalance = beforeData?.totalBalance;
+    const newBalance = afterData.totalBalance;
+
+    // Skip if totalBalance is missing or hasn't changed
+    if (newBalance == null) {
+      console.log(`cardComputeMinPymt: totalBalance missing on ${context.params.cardId}, skipping`);
+      return null;
+    }
+    if (oldBalance === newBalance) {
+      console.log(`cardComputeMinPymt: totalBalance unchanged (${newBalance}) on ${context.params.cardId}, skipping`);
       return null;
     }
 
-    const db = admin.firestore();
-    const { cardRef, userRef } = afterData;
-    if (!cardRef || !userRef) {
-      console.warn(
-        `cardComputeIsCurrent: missing cardRef/userRef on ${context.params.latePaymentId}, skipping`
-      );
+    // Compute 10%
+    const newMin = newBalance * 0.10;
+    const oldMin = afterData.minimumPayment;
+
+    // Skip if already up-to-date
+    if (oldMin === newMin) {
+      console.log(`cardComputeMinPymt: minimumPayment already ${newMin} on ${context.params.cardId}, skipping`);
       return null;
     }
 
-    // Query all late-payments for this card + user
-    const snaps = await db
-      .collection('user_credit_cards_late_payments')
-      .where('cardRef', '==', cardRef)
-      .where('userRef', '==', userRef)
-      .get();
-
-    // If any isPaid === false → isCurrent = false
-    const anyUnpaid = snaps.docs.some(doc => doc.data().isPaid === false);
-    const newIsCurrent = !anyUnpaid;
-
-    // Fetch the parent card
-    const cardSnap = await cardRef.get();
-    if (!cardSnap.exists) {
-      console.warn(`cardComputeIsCurrent: card not found at ${cardRef.path}, skipping`);
-      return null;
-    }
-
-    const oldIsCurrent = cardSnap.data().isCurrent;
-    // Skip if no change
-    if (oldIsCurrent === newIsCurrent) {
-      console.log(
-        `cardComputeIsCurrent: isCurrent already ${newIsCurrent} on ${cardRef.id}, skipping`
-      );
-      return null;
-    }
-
-    // Update parent card
+    // Write it
     try {
-      await cardRef.update({ isCurrent: newIsCurrent });
-      console.log(
-        `cardComputeIsCurrent: updated isCurrent → ${newIsCurrent} on ${cardRef.id}`
-      );
+      await change.after.ref.update({ minimumPayment: newMin });
+      console.log(`cardComputeMinPymt: updated minimumPayment → ${newMin} on ${context.params.cardId}`);
     } catch (err) {
-      console.error(
-        `cardComputeIsCurrent: ERROR updating isCurrent on ${cardRef.id}:`,
-        err
-      );
+      console.error(`cardComputeMinPymt: ERROR updating on ${context.params.cardId}:`, err);
     }
 
     return null;
