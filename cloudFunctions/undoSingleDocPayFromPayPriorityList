@@ -135,6 +135,7 @@ exports.undoSingleDocPayFromPayPriorityList = functions
         deltaLogDocPath: null,
         cycleId: null,
         actionScope: null,
+        actionName: null,
       };
 
       await db.runTransaction(async (tx) => {
@@ -179,9 +180,10 @@ exports.undoSingleDocPayFromPayPriorityList = functions
           return;
         }
 
-        // Pull cycle + scope from the original forward delta
+        // Pull cycle + scope + actionName from the original forward delta
         const cycleId = deltaData.cycleId || null;
         const actionScope = deltaData.actionScope || null;
+        const actionName = deltaData.actionName || null;
 
         const newVersion = currentVersion + 1;
 
@@ -191,7 +193,7 @@ exports.undoSingleDocPayFromPayPriorityList = functions
         updateData['liveVersion'] = newVersion;
         tx.update(accountRef, updateData);
 
-        // Write undo delta (first-class event, same cycle/scope)
+        // Write undo delta (first-class event, same cycle/scope/actionName)
         const undoDeltaRef = db.collection(deltaLogCollection).doc();
         const now = admin.firestore.Timestamp.now();
 
@@ -207,9 +209,10 @@ exports.undoSingleDocPayFromPayPriorityList = functions
           // origin linkage
           [deltaLogRefField]: accountRef,
 
-          // cycle + scope (copied from original delta)
+          // cycle + scope + actionName (copied from original delta)
           cycleId,
           actionScope,
+          actionName,
 
           // identity + flags
           userRef: userRef,
@@ -229,6 +232,7 @@ exports.undoSingleDocPayFromPayPriorityList = functions
         result.deltaLogDocPath = undoDeltaRef.path;
         result.cycleId = cycleId;
         result.actionScope = actionScope;
+        result.actionName = actionName;
       });
 
       return result;
