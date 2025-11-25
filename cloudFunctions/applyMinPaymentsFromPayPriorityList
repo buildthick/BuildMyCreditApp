@@ -111,11 +111,11 @@ exports.applyMinPaymentsFromPayPriorityList = functions
     const uid = context.auth.uid;
     const userRef = db.doc(`users/${uid}`);
 
-    // 🌀 New batching model: cycleId + actionScope
+    // batching model: cycleId + actionScope
     const actionScope = 'OAAA'; // One Action, All Accounts – PayMin
+    const actionName = "all accounts minimum payment";
 
     try {
-      // Fetch user pay-priority list
       const ppSnap = await db
         .collection('user_pay_priority_list')
         .where('userRef', '==', userRef)
@@ -140,7 +140,6 @@ exports.applyMinPaymentsFromPayPriorityList = functions
         const minPayRaw = getMinPayment(payData);
         if (minPayRaw <= 0) continue;
 
-        // Cycle used is always the one belonging to the pay-priority doc
         const docCycleId = payData.cycleId || null;
 
         const originInfo = resolveOrigin(payData);
@@ -161,7 +160,6 @@ exports.applyMinPaymentsFromPayPriorityList = functions
 
           const accData = accSnap.data() || {};
           const oldBalance = asNum(accData[balanceField], 0);
-
           if (oldBalance <= 0) return;
 
           const payment = clamp(minPayRaw, 0, oldBalance);
@@ -173,21 +171,18 @@ exports.applyMinPaymentsFromPayPriorityList = functions
 
           if (newBalance === oldBalance) return;
 
-          const updateData = {};
-          updateData[balanceField] = newBalance;
-          updateData.liveVersion = newVersion;
-          tx.update(accountRef, updateData);
+          tx.update(accountRef, {
+            [balanceField]: newBalance,
+            liveVersion: newVersion,
+          });
 
-          // Build delta log entry
           const deltaRef = db.collection(deltaLogCollection).doc();
           const deltaData = {
             prev_Version: oldVersion,
             subs_Version: newVersion,
             field_Changed: balanceField,
             previous_Value: oldBalance,
-
-            // NEW: signed delta for display
-            amountChanged: newBalance - oldBalance, // typically negative
+            amountChanged: newBalance - oldBalance, // signed delta
 
             userRef,
             IsChange: true,
@@ -195,6 +190,7 @@ exports.applyMinPaymentsFromPayPriorityList = functions
 
             cycleId: docCycleId,
             actionScope,
+            actionName,  // <-- NEW FIELD ADDED HERE
 
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
           };
@@ -208,7 +204,7 @@ exports.applyMinPaymentsFromPayPriorityList = functions
       }
 
       return {
-        cycleId: null, // you can fill this manually if needed; multiple cycles may exist
+        cycleId: null,
         totalPriorityItems: ppSnap.size,
         processedItems,
         updatedAccounts,
