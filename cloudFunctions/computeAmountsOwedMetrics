@@ -10,53 +10,82 @@ exports.computeAmountsOwedMetrics = functions.region('us-central1').https.onCall
     const db = admin.firestore();
     const userRef = db.doc(`users/${uid}`);
 
-    // Pull consolidated stocks for this user
-    const snap = await db
-      .collection('user_stocks_conso')
+    // helper: normalize numbers (finite + rounding to 6 dp)
+    const n = (x) => {
+      const v = Number(x ?? 0);
+      if (!Number.isFinite(v)) return 0;
+      return Math.round(v * 1e6) / 1e6;
+    };
+
+    // 1) Read source
+    const snap = await db.collection('user_stocks_conso')
       .where('userRef', '==', userRef)
       .get();
 
-    let cardBal = 0;
-    let cardLimit = 0;
-    let loanBal = 0;
-    let loanLimit = 0;
+    // 2) Aggregate (open accounts only; lateness doesn’t matter)
+    let cardBal = 0, cardLimit = 0, loanBal = 0, loanLimit = 0;
 
-    snap.forEach((doc) => {
+    snap.forEach(doc => {
       const d = doc.data();
-      if (!d?.isOpen) return; // utilization cares only that the account is open
+      if (!d?.isOpen) return;
 
-      // Revolving (credit cards)
       if (d.stock === 'user_credit_cards') {
         cardBal  += Number(d.amountsOwed ?? 0);
         cardLimit += Number(d.creditLimit  ?? 0);
-      }
-
-      // Installment (loans)
-      if (d.stock === 'user_loans') {
+      } else if (d.stock === 'user_loans') {
         loanBal  += Number(d.amountsOwed ?? 0);
         loanLimit += Number(d.creditLimit  ?? 0);
       }
     });
 
-    // Safe utilization math (0 when denominator == 0)
+    // 3) Compute utilizations (safe divide)
     const revolvingUtilization   = cardLimit > 0 ? cardBal / cardLimit : 0;
     const installmentUtilization = loanLimit > 0 ? loanBal / loanLimit : 0;
     const totalDenom = cardLimit + loanLimit;
     const totalUtilization = totalDenom > 0 ? (cardBal + loanBal) / totalDenom : 0;
 
-    const docBody = {
-      cardBal,
-      cardLimit,
-      revolvingUtilization,
-      loanBal,
-      loanLimit,
-      installmentUtilization,
-      totalUtilization,
-      userRef,
-      updated_time: admin.firestore.FieldValue.serverTimestamp(),
+    // 4) Normalize
+    const nextMetrics = {
+      cardBal: n(cardBal),
+      cardLimit: n(cardLimit),
+      revolvingUtilization: n(revolvingUtilization),
+      loanBal: n(loanBal),
+      loanLimit: n(loanLimit),
+      installmentUtilization: n(installmentUtilization),
+      totalUtilization: n(totalUtilization),
     };
 
-    await db.collection('user_metricsAmountsOwed').doc(uid).set(docBody, { merge: true });
-    return { success: true, metrics: docBody };
+    // 5) Compare with existing; only write if changed
+    const docRef = db.collection('user_metricsAmountsOwed').doc(uid);
+    const existingSnap = await docRef.get();
+    const prev = existingSnap.exists ? existingSnap.data() : null;
+
+    const changed =
+      !prev ||
+      nextMetrics.cardBal !== n(prev.cardBal) ||
+      nextMetrics.cardLimit !== n(prev.cardLimit) ||
+      nextMetrics.revolvingUtilization !== n(prev.revolvingUtilization) ||
+      nextMetrics.loanBal !== n(prev.loanBal) ||
+      nextMetrics.loanLimit !== n(prev.loanLimit) ||
+      nextMetrics.installmentUtilization !== n(prev.installmentUtilization) ||
+      nextMetrics.totalUtilization !== n(prev.totalUtilization);
+
+    if (changed) {
+      await docRef.set(
+        {
+          ...nextMetrics,
+          userRef, // ok to store DocumentReference in Firestore
+          updated_time: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+
+    // Return only plain JSON (no DocumentReference/sentinels)
+    return {
+      success: true,
+      wrote: changed,
+      metrics: { ...nextMetrics, userPath: `users/${uid}` },
+    };
   }
 );
