@@ -134,7 +134,10 @@ exports.undoMinPayFromPayPriorityList = functions
         const oaaaData = oaaaDeltaDoc.data() || {};
 
         const prevVersionBeforeOAAA = asNum(oaaaData.prev_Version, 0);
-        const subsVersionOAAA = asNum(oaaaData.subs_Version, prevVersionBeforeOAAA + 1);
+        const subsVersionOAAA = asNum(
+          oaaaData.subs_Version,
+          prevVersionBeforeOAAA + 1
+        );
         const valueBeforeOAAA = asNum(oaaaData.previous_Value, NaN);
         const cycleId = oaaaData.cycleId || null;
         const actionScope = oaaaData.actionScope || 'OAAA';
@@ -155,7 +158,6 @@ exports.undoMinPayFromPayPriorityList = functions
           .limit(1)
           .get();
 
-        // We'll pass this into the transaction via closure.
         let newValueAfterOAAA = null;
         if (!nextSnap.empty) {
           const nextData = nextSnap.docs[0].data() || {};
@@ -206,7 +208,7 @@ exports.undoMinPayFromPayPriorityList = functions
           updateData['liveVersion'] = newVersion;
           tx.update(accountRef, updateData);
 
-          // 3️⃣ Write an UNDO delta with lineage + cycleId + actionScope
+          // 3️⃣ Write an UNDO delta with lineage + cycleId + actionScope + actionName
           const undoDeltaRef = db.collection(deltaLogCollection).doc();
           const undoDeltaData = {
             prev_Version: currentVersion,
@@ -227,6 +229,9 @@ exports.undoMinPayFromPayPriorityList = functions
             cycleId,
             actionScope,
 
+            // new field
+            actionName: 'all accounts minimum payment',
+
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
           };
           undoDeltaData[deltaLogRefField] = accountRef;
@@ -242,7 +247,6 @@ exports.undoMinPayFromPayPriorityList = functions
         processedItems,
         undoneAccounts,
       };
-
     } catch (err) {
       console.error('undoMinPayFromPayPriorityList error:', err);
       throw new functions.https.HttpsError(
