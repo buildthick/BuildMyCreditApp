@@ -24,19 +24,15 @@ function getMinPayment(payDocData) {
   switch (stockType) {
     case 'user_credit_cards':
     case 'user_loans':
-      // Normal current accounts
       return asNum(ab.minPayment, asNum(payDocData.minPayment, 0));
 
     case 'user_credit_cards_late_payments':
-      // Card collections / late amounts
       return asNum(ab.collections, asNum(payDocData.amount, 0));
 
     case 'user_loans_late_payments':
-      // Loan late severity amount
       return asNum(ab.lateSeverityPayment, asNum(payDocData.amount, 0));
 
     case 'user_collections_3rd_party':
-      // Treat like collections
       return asNum(ab.collections, asNum(payDocData.amount, 0));
 
     default:
@@ -122,8 +118,6 @@ exports.applySingleDocPayFromPayPriorityList = functions
 
     // In FlutterFlow, pass selectedDoc.reference.path as data.docRef
     const payPriorityDocPath = data.docRef;
-    // docDeltaRef kept for FF compatibility, not used right now
-    const _docDeltaRef = data.docDeltaRef;
 
     if (typeof payPriorityDocPath !== 'string' || !payPriorityDocPath) {
       throw new functions.https.HttpsError(
@@ -133,7 +127,6 @@ exports.applySingleDocPayFromPayPriorityList = functions
     }
 
     try {
-      // ---------- 1) Load pay-priority doc ----------
       const payPriorityDocRef = db.doc(payPriorityDocPath);
       const paySnap = await payPriorityDocRef.get();
 
@@ -154,11 +147,12 @@ exports.applySingleDocPayFromPayPriorityList = functions
         );
       }
 
-      // Cycle + scope
+      // Pull cycleId straight from the rec doc
       const cycleId =
         typeof payData.cycleId === 'string' ? payData.cycleId : null;
-      // For this CF, always one action on one account
-      const actionScope = 'OAOA';
+
+      // For single-doc apply: always OAOA
+      const actionScope = "OAOA";
 
       const minPayRaw = getMinPayment(payData);
       if (minPayRaw <= 0) {
@@ -166,8 +160,6 @@ exports.applySingleDocPayFromPayPriorityList = functions
           payPriorityDocPath,
           paymentApplied: false,
           reason: 'No positive payment amount for this item.',
-          cycleId,
-          actionScope,
         };
       }
 
@@ -177,8 +169,6 @@ exports.applySingleDocPayFromPayPriorityList = functions
           payPriorityDocPath,
           paymentApplied: false,
           reason: 'Origin account not wired for this stockType.',
-          cycleId,
-          actionScope,
         };
       }
 
@@ -194,8 +184,6 @@ exports.applySingleDocPayFromPayPriorityList = functions
           payPriorityDocPath,
           paymentApplied: false,
           reason: 'Origin account reference is invalid.',
-          cycleId,
-          actionScope,
         };
       }
 
@@ -205,11 +193,8 @@ exports.applySingleDocPayFromPayPriorityList = functions
         amountApplied: 0,
         previousBalance: null,
         newBalance: null,
-        cycleId,
-        actionScope,
       };
 
-      // ---------- 2) Transaction: apply payment + write delta ----------
       await db.runTransaction(async (tx) => {
         const accountSnap = await tx.get(accountRef);
         if (!accountSnap.exists) {
@@ -220,7 +205,8 @@ exports.applySingleDocPayFromPayPriorityList = functions
         const accData = accountSnap.data() || {};
         const oldBalance = asNum(accData[balanceField], 0);
         if (oldBalance <= 0) {
-          result.reason = 'Origin account balance is already zero or negative.';
+          result.reason =
+            'Origin account balance is already zero or negative.';
           return;
         }
 
@@ -239,40 +225,28 @@ exports.applySingleDocPayFromPayPriorityList = functions
           return;
         }
 
-        // Update origin account (version bump)
+        // Update origin account
         const updateData = {};
         updateData[balanceField] = newBalance;
         updateData['liveVersion'] = newVersion;
         tx.update(accountRef, updateData);
 
-        // Write delta log entry (forward change, with cycle + scope)
+        // Write delta log entry
         const deltaRef = db.collection(deltaLogCollection).doc();
-        const now = admin.firestore.Timestamp.now();
-
         const deltaData = {
-          // version lineage
           prev_Version: oldVersion,
           subs_Version: newVersion,
           field_Changed: balanceField,
           previous_Value: oldBalance,
-          amountChanged: payment, // 👈 NEW: explicit delta
-
-          // origin linkage
-          [deltaLogRefField]: accountRef,
-
-          // cycle + scope
-          cycleId: cycleId || null,
+          amountChanged: payment,
+          cycleId,
           actionScope,
-
-          // identity + flags
+          actionName: "single minimum payment",
           userRef: userRef,
           IsChange: true,
-          IsUndo: false,
-
-          // timestamp
-          createdAt: now,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
         };
-
+        deltaData[deltaLogRefField] = accountRef;
         tx.set(deltaRef, deltaData);
 
         result.paymentApplied = true;
