@@ -143,6 +143,7 @@ exports.applyUseEstimateSpendFromUseActions = functions
 
           cycleId,
           actionScope,
+          actionName: "single estimated spend from use actions",
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
 
           ccRef: cardRef,
