@@ -39,7 +39,7 @@ const functions = require('firebase-functions');
 const admin     = require('firebase-admin');
 // FlutterFlow initializes admin
 
-exports.writeAndComputePayPrioritiesListORCH = functions
+exports.writeAndComputePayPrioritiesList = functions
   .region('us-central1')
   .https.onCall(async (data, context) => {
     if (!context.auth?.uid) {
@@ -62,23 +62,6 @@ exports.writeAndComputePayPrioritiesListORCH = functions
       const raw  = Math.ceil(days / 30) * 30;
       return Math.min(180, Math.max(30, raw)); // 30..180
     };
-
-    // ---------- cycleId (optional, from mother CF) ----------
-    // FF will pass data.cycleID (per your stub). We also accept data.cycleId for safety.
-    let cycleId = null;
-    if (data) {
-      if (data.cycleID != null) {
-        cycleId = typeof data.cycleID === 'string'
-          ? data.cycleID
-          : String(data.cycleID);
-      } else if (data.cycleId != null) {
-        cycleId = typeof data.cycleId === 'string'
-          ? data.cycleId
-          : String(data.cycleId);
-      }
-    }
-    // If cycleId is null => standalone/testing mode: no cycle field written.
-    // -------------------------------------------------------------
 
     // ---------- Inputs ----------
     const monthlyBudget = asNum((await userRef.get()).get('monthly_budget'), 0);
@@ -173,7 +156,7 @@ exports.writeAndComputePayPrioritiesListORCH = functions
         dueDay,
         isAnnualFee,
         isCFA,
-        isCollectionFromAccount: false,  // never a collection for base accounts
+        isCollectionFromAccount: false,  // NEW: never a collection for base accounts
         alloc_total: 0,
         alloc_min: 0,
         alloc_card_extra: 0,
@@ -201,7 +184,7 @@ exports.writeAndComputePayPrioritiesListORCH = functions
         sourceRef: L.ref,
         severity,
         amount,
-        isCollectionFromAccount: sentToCollections,
+        isCollectionFromAccount: sentToCollections, // NEW: mark account-origin collections
         alloc_total: 0,
         alloc_late: 0,
         alloc_collections: 0,
@@ -218,7 +201,7 @@ exports.writeAndComputePayPrioritiesListORCH = functions
         lender: C.collectionsAgency ?? null,
         sourceRef: C.ref,
         amount: asNum(C.amount, 0),
-        isCollectionFromAccount: false,
+        isCollectionFromAccount: false, // NEW: not from a late; pure 3rd-party
         alloc_total: 0,
         alloc_collections: 0,
       });
@@ -372,11 +355,10 @@ exports.writeAndComputePayPrioritiesListORCH = functions
         availableRemainder: x.availableRemainder,
         totalAllocated: x.totalAllocated,
         minimumPreservationBudget: x.minimumPreservationBudget,
-        isCollectionFromAccount: !!x.isCollectionFromAccount,
+        isCollectionFromAccount: !!x.isCollectionFromAccount,  // NEW in comparison
         stockType: x.stockType,
         name: x.name,
         lender: x.lender,
-        // NOTE: cycleId intentionally excluded so comparison ignores it.
       };
       if (x.stockType === 'user_credit_cards' || x.stockType === 'user_loans') {
         return {
@@ -443,11 +425,11 @@ exports.writeAndComputePayPrioritiesListORCH = functions
         availableRemainder,
         totalAllocated,
         minimumPreservationBudget,
-        isCollectionFromAccount: !!i.isCollectionFromAccount,
+        isCollectionFromAccount: !!i.isCollectionFromAccount,  // NEW: persisted on every doc
         originDocRef, // DocRefMultiCollection custom object
       };
 
-      let newDataCore;
+      let newData;
 
       if (i.kind === 'account') {
         const breakdown =
@@ -460,7 +442,7 @@ exports.writeAndComputePayPrioritiesListORCH = functions
                 minPayment: Number(i.alloc_min.toFixed(2)),       // loans: no cardExtra key
               };
 
-        newDataCore = {
+        newData = {
           ...base,
           stockType: i.stock,
           name: i.name,
@@ -473,7 +455,7 @@ exports.writeAndComputePayPrioritiesListORCH = functions
           allocationBreakdown: breakdown,
         };
       } else if (i.kind === 'late') {
-        newDataCore = {
+        newData = {
           ...base,
           stockType: i.stock,
           name: i.name,
@@ -486,7 +468,7 @@ exports.writeAndComputePayPrioritiesListORCH = functions
           },
         };
       } else {
-        newDataCore = {
+        newData = {
           ...base,
           stockType: i.stock,
           name: i.name,
@@ -500,18 +482,8 @@ exports.writeAndComputePayPrioritiesListORCH = functions
       }
 
       const prevRelevant = existingMap[i.id];
-
-      // Compare only core fields (no cycleId) so:
-      // - standalone runs don't care about cycleId
-      // - mother runs can still stamp cycleId on docs even if core unchanged
-      const coreChanged = !prevRelevant || JSON.stringify(prevRelevant) !== JSON.stringify(newDataCore);
-
-      if (coreChanged || cycleId) {
-        const payload = { ...newDataCore };
-        if (cycleId) {
-          payload.cycleId = cycleId;
-        }
-        batch.set(docRef, payload, { merge: true });
+      if (!prevRelevant || JSON.stringify(prevRelevant) !== JSON.stringify(newData)) {
+        batch.set(docRef, newData, { merge: true });
       }
     });
 
