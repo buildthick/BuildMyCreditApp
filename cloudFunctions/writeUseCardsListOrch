@@ -48,12 +48,11 @@ exports.writeUseCardsListOrch = functions.region('us-central1').https.onCall(
       return d.getTime() < thresh.getTime();
     };
 
-    // 1) Pull ALL cards for this user (no composite index needed)
+    // 1) Pull ALL cards for this user
     const allCardsSnap = await db.collection('user_credit_cards')
       .where('userRef', '==', userRef)
       .get();
 
-    // Keep tracking sets/arrays
     const allIds = new Set();
     const openCards = [];
 
@@ -65,16 +64,18 @@ exports.writeUseCardsListOrch = functions.region('us-central1').https.onCall(
       }
     });
 
-    // 2) Count of open cards with balance > 0  (DOUBLE field)
+    // 2) Count open cards with balance > 0
     const cardsWithBalanceCount = openCards.reduce((acc, { data }) => {
       const bal = Number(data.totalBalance ?? 0);
       return acc + (bal > 0 ? 1 : 0);
     }, 0);
 
-    // 3) Build candidate list (include 0-balance cards), then exclude annual fee / CFA
-    const candidates = openCards.filter(({ data }) => !(data.isCFA === true || data.isAnnualFee === true));
+    // 3) Candidates: filter out CFA + annual fee cards
+    const candidates = openCards.filter(({ data }) =>
+      !(data.isCFA === true || data.isAnnualFee === true)
+    );
 
-    // 4) Compute useAge + 5-month risk + rank
+    // 4) Compute age + risk flags + rank
     const items = candidates.map(({ id, data }) => {
       const dlu = toJsDate(data.dateLastUsed);
 
@@ -84,13 +85,15 @@ exports.writeUseCardsListOrch = functions.region('us-central1').https.onCall(
         useAgeDays = Math.floor((now - dlu) / (24 * 60 * 60 * 1000));
         useAgeMs = now - dlu;
       } else {
-        // Spec: missing dateLastUsed => useAge = 1 month
         useAgeMonths = 1;
         useAgeDays = 30;
         useAgeMs = 30 * 24 * 60 * 60 * 1000;
       }
 
-      const isOlderThan5M = dlu ? olderThanCalendarMonths(dlu, 5) : (useAgeMonths > 5);
+      const isOlderThan5M = dlu
+        ? olderThanCalendarMonths(dlu, 5)
+        : (useAgeMonths > 5);
+
       const atAgeRiskOrAZEOorBoth =
         (isOlderThan5M && cardsWithBalanceCount === 0) ||
         (isOlderThan5M && cardsWithBalanceCount < 2);
@@ -108,7 +111,7 @@ exports.writeUseCardsListOrch = functions.region('us-central1').https.onCall(
     items.sort((a, b) => b.useAgeMs - a.useAgeMs);
     items.forEach((it, i) => { it.rank = i + 1; });
 
-    // 5) Upserts (idempotent, same doc id as source)
+    // 5) Upserts
     const batch = db.batch();
 
     for (const it of items) {
@@ -139,7 +142,7 @@ exports.writeUseCardsListOrch = functions.region('us-central1').https.onCall(
         isCFA: src.isCFA ?? null,
         isAnnualFee: src.isAnnualFee ?? null,
 
-        // Dates (preserve if present)
+        // Dates
         dateLastUsed: src.dateLastUsed ?? null,
         dateIssued: src.dateIssued ?? null,
 
@@ -149,16 +152,19 @@ exports.writeUseCardsListOrch = functions.region('us-central1').https.onCall(
 
         // Bookkeeping
         created_time: admin.firestore.FieldValue.serverTimestamp(),
+
+        // NEW FIELD
+        actionIsAccepted: false,
       };
 
       if (cycleId) {
-        basePayload.cycleId = cycleId; // tag use-card rec with cycleId when orchestrated
+        basePayload.cycleId = cycleId;
       }
 
       batch.set(targetRef, basePayload, { merge: true });
     }
 
-    // 6) Cleanup: delete only orphans for this user
+    // 6) Cleanup orphaned entries
     const existingListSnap = await db.collection('user_use_cards_list')
       .where('userRef', '==', userRef)
       .get();
