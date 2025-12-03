@@ -8,4 +8,4 @@
 4. They store these in the SimulationState file
 5. tickOneMonth applies the logic from pay/open/close/use files on a single-cycle basis, "running" the simulation
 6. Results get pushed to SimulationState file, which loops data into deltaLogs at the stocks_conso level and updates aggregate metrics with timestamp (no deltaLogs needed)
-7. SimulationState keeps a record of the current cycle and stops when
+7. SimulationState keeps a record of the current cycle and stops when cycle number reached
