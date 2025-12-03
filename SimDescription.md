@@ -1,5 +1,5 @@
 ### How it works
-## 1 - SimulatePlan CF file is firebase Entry Point for the following
+## 1 - SimulatePlan CF file is firebase Entry Point for the following functions
 1. Loaders take data from origin accounts and create an in-memory stocks_conso shape dataset
 2. They also take:
    offers_loans -- for open actions
