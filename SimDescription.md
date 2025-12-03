@@ -1,4 +1,5 @@
 ### How it works
+## 
 1. Loaders take data from origin accounts and create an in-memory stocks_conso shape dataset
 2. They also take:
    offers_loans -- for open actions
