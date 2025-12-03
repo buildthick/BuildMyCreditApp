@@ -1,12 +1,12 @@
 ## How it works
 ### 1 - SimulatePlan CF file is firebase Entry Point for the following functions
 1. Loaders take data from origin accounts and create an in-memory stocks_conso shape dataset
-2. They also take:
-   offers_loans -- for open actions
-   offers_cards -- for open actions
-   user -- for budget and loan permissions
-   cycle number from UI -- to determine the length of the simulation
-   user_openAndCloseAdjustments -- for those respective actions
+2. They also take:<br>
+   offers_loans -- for open actions<br>
+   offers_cards -- for open actions<br>
+   user -- for budget and loan permissions<br>
+   cycle number from UI -- to determine the length of the simulation<br>
+   user_openAndCloseAdjustments -- for those respective actions<br>
 3. They store these in the SimulationState file
 4. tickOneMonth applies the logic from pay/open/close/use files on a single-cycle basis, "running" the simulation
 5. Results get pushed to SimulationState file, which loops data into deltaLogs at the stocks_conso level and updates aggregate metrics with timestamp (no deltaLogs needed)
