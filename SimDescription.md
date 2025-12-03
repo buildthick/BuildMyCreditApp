@@ -10,3 +10,7 @@
 4. tickOneMonth applies the logic from pay/open/close/use files on a single-cycle basis, "running" the simulation
 5. Results get pushed to SimulationState file, which loops data into deltaLogs at the stocks_conso level and updates aggregate metrics with timestamp (no deltaLogs needed)
 6. SimulationState keeps a record of the current cycle and stops when cycle number reached
+7. writeSimOutputs writes the results to three top-level Firebase collections:
+   /user_sim_stocks_conso
+   /user_sim_deltaLog_stocks_conso
+   /user_sim_agg_metrics
