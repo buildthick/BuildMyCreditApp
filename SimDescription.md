@@ -15,3 +15,14 @@
    /user_sim_stocks_conso
    /user_sim_deltaLog_stocks_conso
    /user_sim_agg_metrics
+
+### Agg Metrics:
+1. For all stock types:
+   installment;
+   revolving;
+   lates;
+   collections;
+   Count of Payments (since so many ppl think number of payments is a ranking factor despite FICO documentation and consumer evidence not suggesting it)
+   FICO score
+3. Variables possible: account, amounts owed (paid and unpaid), age, utilization
+4. In these aggregations: sum, average, max, min, count, and score itself singular value for FICO
