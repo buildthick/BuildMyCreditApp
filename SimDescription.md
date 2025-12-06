@@ -17,7 +17,7 @@
    /user_sim_agg_metrics
 
 ### Agg Metrics:
-## *Done later in UI, not in sim*
+#### *Done later in UI, not in sim*
 1. For all stock types:
    installment;
    revolving;
