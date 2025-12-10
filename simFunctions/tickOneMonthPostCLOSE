@@ -1,0 +1,191 @@
+// functions/lib/creditEngine/sim/tickOneMonth.js
+
+const {
+  buildPayPriorityListFromData,
+} = require('../pay/buildPayPriorityListFromData');
+
+const {
+  runOpenCycle,
+} = require('../open/runOpenCycle'); // 🔹 NEW: Open step
+
+const {
+  runCloseCycle,
+} = require('../close/runCloseCycle'); // 🔹 NEW: Close step
+
+// Simple numeric helper
+const asNum = (v, d = 0) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
+};
+
+// Apply a payment allocation to a single stocks_conso-style row
+function applyPaymentToRow(row, stock, allocRaw) {
+  const alloc = asNum(allocRaw, 0);
+  if (alloc <= 0 || !row) return;
+
+  // Credit cards
+  if (stock === 'user_credit_cards') {
+    const prev = asNum(
+      row.amountsOwed ??
+      row.totalBalance ??
+      row.balance,
+      0
+    );
+    const next = Math.max(0, prev - alloc);
+    row.amountsOwed = next;
+    row.totalBalance = next;
+    row.balance = next;
+    return;
+  }
+
+  // Loans
+  if (stock === 'user_loans') {
+    const prev = asNum(
+      row.amountsOwed ??
+      row.balance,
+      0
+    );
+    const next = Math.max(0, prev - alloc);
+    row.amountsOwed = next;
+    row.balance = next;
+    return;
+  }
+
+  // Lates & 3rd party collections
+  if (
+    stock === 'user_credit_cards_late_payments' ||
+    stock === 'user_loans_late_payments' ||
+    stock === 'user_collections_3rd_party'
+  ) {
+    const prev = asNum(
+      row.amountsOwed ??
+      row.amount,
+      0
+    );
+    const next = Math.max(0, prev - alloc);
+    row.amountsOwed = next;
+    row.amount = next;
+    return;
+  }
+
+  // Fallback: just try amountsOwed or balance
+  const prev = asNum(
+    row.amountsOwed ??
+    row.balance ??
+    row.totalBalance ??
+    row.amount,
+    0
+  );
+  const next = Math.max(0, prev - alloc);
+  if ('amountsOwed' in row) row.amountsOwed = next;
+  if ('balance' in row) row.balance = next;
+  if ('totalBalance' in row) row.totalBalance = next;
+  if ('amount' in row) row.amount = next;
+}
+
+// Utility: add N months to a JS Date
+function addMonths(date, n) {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + n);
+  return d;
+}
+
+/**
+ * tickOneMonth(state)
+ *
+ * Full monthly step:
+ *   1. PAY (apply allocations to balances)
+ *   2. OPEN (add new accounts / hard pulls in-memory)
+ *   3. SNAPSHOT
+ *   4. ADVANCE simDate + monthIndex
+ *
+ * `state` is an instance of SimulationState.
+ */
+function tickOneMonth(state) {
+  if (!state || !state.stocks) {
+    console.warn('tickOneMonth called with invalid state');
+    return state;
+  }
+
+  const now =
+    state.simDate instanceof Date ? state.simDate : new Date();
+
+  // ---------- 1) PAY ACTIONS ----------
+  try {
+    const payResult = buildPayPriorityListFromData({
+      nowMs: now.getTime(),
+      monthlyBudget: state.monthlyBudget || 0,
+      accounts: state.accounts || [],
+      lateItems: state.lateItems || [],
+      tpcItems: state.tpcItems || [],
+    });
+
+    // Apply allocations to underlying stocks_conso rows
+    if (payResult && Array.isArray(payResult.items)) {
+      const items = payResult.items;
+
+      items.forEach((p) => {
+        if (!p || !p.id || !p.stock) return;
+
+        const alloc = asNum(p.alloc_total, 0);
+        if (alloc <= 0) return;
+
+        // Find the corresponding row in the canonical stocks array
+        const row = state.stocks.find(
+          (s) => s && s.id === p.id && s.stock === p.stock
+        );
+        if (!row) return;
+
+        applyPaymentToRow(row, p.stock, alloc);
+      });
+    }
+
+    // Keep derived views in sync after Pay
+    if (typeof state.refreshDerivedViews === 'function') {
+      state.refreshDerivedViews();
+    }
+  } catch (err) {
+    console.error('tickOneMonth PAY step failed:', err);
+  }
+
+  // ---------- 2) OPEN ACTIONS ----------
+  try {
+    if (typeof runOpenCycle === 'function') {
+      runOpenCycle(state);
+    }
+
+    // Rebuild derived views after structural changes (new accounts / pulls)
+    if (typeof state.refreshDerivedViews === 'function') {
+      state.refreshDerivedViews();
+    }
+  } catch (err) {
+    console.error('tickOneMonth OPEN step failed:', err);
+  }
+
+  // ---------- 3) CLOSE ACTIONS ----------
+  try {
+    if (typeof runCloseCycle === 'function') {
+      runCloseCycle(state);
+    }
+
+    // After changing isOpen / limits, keep any mirrors in sync
+    if (typeof state.refreshDerivedViews === 'function') {
+      state.refreshDerivedViews();
+    }
+  } catch (err) {
+    console.error('tickOneMonth CLOSE step failed:', err);
+  }
+
+  // ---------- 4) SNAPSHOT ----------
+  if (typeof state.snapshotCurrentStocks === 'function') {
+    state.snapshotCurrentStocks();
+  }
+
+  // ---------- 5) ADVANCE TIME ----------
+  state.monthIndex += 1;
+  state.simDate = addMonths(now, 1);
+
+  return state;
+}
+
+module.exports = { tickOneMonth };
