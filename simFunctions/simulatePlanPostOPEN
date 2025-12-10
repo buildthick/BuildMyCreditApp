@@ -1,0 +1,129 @@
+// functions/cf/1 - simulatePlan.js
+
+const functions = require('firebase-functions/v1');
+const admin = require('firebase-admin');
+
+// -------- IMPORTS BASED ON YOUR ACTUAL FOLDER STRUCTURE --------
+
+// Loaders
+const {
+  loadSimulationInputs,
+} = require('../lib/creditEngine/loaders/loadSimulationInputs');
+
+// Simulation engine core
+const {
+  SimulationState,
+} = require('../lib/creditEngine/sim/SimulationState');
+
+const {
+  tickOneMonth,
+} = require('../lib/creditEngine/sim/tickOneMonth');
+
+const {
+  writeSimOutputs,
+} = require('../lib/creditEngine/sim/writeSimOutputs');
+
+// -------- SAFETY LIMITS --------
+const MAX_MONTHS = 120;   // simulation hard cap
+const DEFAULT_MONTHS = 12;
+
+exports.simulatePlan = functions
+  .runWith({
+    timeoutSeconds: 120,
+    memory: '512MB',
+  })
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+
+    // ---------- AUTH ----------
+    if (!context.auth || !context.auth.uid) {
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'Must be signed in.'
+      );
+    }
+
+    const db = admin.firestore();
+    const uid = context.auth.uid;
+    const userRef = db.doc(`users/${uid}`);
+
+    // ---------- UI INPUT NORMALIZATION ----------
+
+    // Months
+    const rawMonths =
+      data?.numberOfMonthsInSim != null
+        ? data.numberOfMonthsInSim
+        : data?.months;
+
+    let numberOfMonthsInSim =
+      typeof rawMonths === 'number' && isFinite(rawMonths) && rawMonths > 0
+        ? Math.floor(rawMonths)
+        : DEFAULT_MONTHS;
+
+    numberOfMonthsInSim = Math.min(numberOfMonthsInSim, MAX_MONTHS);
+
+    // Simulated monthly spend
+    const monthlySimulatedSpend =
+      typeof data?.monthlySimulatedSpend === 'number' &&
+      isFinite(data.monthlySimulatedSpend) &&
+      data.monthlySimulatedSpend > 0
+        ? data.monthlySimulatedSpend
+        : 0;
+
+    // Expected limits for new accounts
+    const expectedNewCardLimit =
+      typeof data?.expectedNewCardLimit === 'number' &&
+      isFinite(data.expectedNewCardLimit) &&
+      data.expectedNewCardLimit > 0
+        ? data.expectedNewCardLimit
+        : 0;
+
+    const expectedNewLoanPrincipal =
+      typeof data?.expectedNewLoanPrincipal === 'number' &&
+      isFinite(data.expectedNewLoanPrincipal) &&
+      data.expectedNewLoanPrincipal > 0
+        ? data.expectedNewLoanPrincipal
+        : 0;
+
+    // ---------- LOAD ORIGIN DATA ----------
+    const loaded = await loadSimulationInputs(
+      db,
+      userRef,
+      numberOfMonthsInSim
+    );
+
+    // Monthly budget for payments from user doc
+    const monthlyBudget =
+      loaded &&
+      loaded.user &&
+      typeof loaded.user.monthly_budget === 'number' &&
+      isFinite(loaded.user.monthly_budget) &&
+      loaded.user.monthly_budget > 0
+        ? loaded.user.monthly_budget
+        : 0;
+
+    // ---------- INITIALIZE SIM STATE ----------
+    const state = new SimulationState({
+      ...loaded,
+      monthlyBudget,              // 🔹 new
+      monthlySimulatedSpend,
+      expectedNewCardLimit,
+      expectedNewLoanPrincipal,
+      startDate: new Date(),
+    });
+
+
+    // ---------- RUN SIMULATION ----------
+    for (let i = 0; i < numberOfMonthsInSim; i++) {
+      tickOneMonth(state);
+    }
+
+    // ---------- WRITE RESULTS ----------
+    const { simRunId } = await writeSimOutputs(db, userRef, state);
+
+    return {
+      success: true,
+      simRunId,
+      months: numberOfMonthsInSim,
+    };
+  });
