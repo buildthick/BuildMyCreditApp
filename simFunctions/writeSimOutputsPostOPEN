@@ -1,0 +1,87 @@
+// functions/lib/creditEngine/2 - sim/writeSimOutputs.js
+
+const admin = require('firebase-admin');
+
+/**
+ * Writes simulation outputs to Firestore:
+ *
+ * 1. Creates ONE run header doc:
+ *      users/{uid}/SimulationRuns/{simRunId}
+ *
+ * 2. Writes MANY row docs to:
+ *      user_sim_stocks_conso
+ *
+ * Each snapshot = one account at one monthIndex.
+ */
+async function writeSimOutputs(db, userRef, state) {
+  // ---------- CREATE THE SIMULATION RUN HEADER DOC ----------
+  const simRunRef = userRef.collection('SimulationRuns').doc();
+
+  const runMeta = {
+    userRef,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+
+    // these exist because simulatePlan passes them into SimulationState
+    totalCycles: state.totalCycles ?? (state.stockSnapshots?.length ?? null),
+    startedAt: state.startDate ?? null,
+    finishedAt: state.simDate ?? null,
+
+    monthlySimulatedSpend: state.monthlySimulatedSpend ?? null,
+    expectedNewCardLimit: state.expectedNewCardLimit ?? null,
+    expectedNewLoanPrincipal: state.expectedNewLoanPrincipal ?? null,
+  };
+
+  const batch = db.batch();
+
+  // Write the run header
+  batch.set(simRunRef, runMeta, { merge: true });
+
+  // ---------- SET UP COLLECTION FOR SNAPSHOT ROWS ----------
+  const simStocksColl = db.collection('user_sim_stocks_conso');
+
+  // We rely on SimulationState.stockSnapshots[]
+  const snapshots =
+    Array.isArray(state.stockSnapshots) && state.stockSnapshots.length > 0
+      ? state.stockSnapshots
+      : [
+          {
+            cycleIndex: state.currentCycle || 0,
+            simDate: state.simDate || new Date(),
+            stocks: state.stocks || [],
+          },
+        ];
+
+  // ---------- WRITE EACH (ACCOUNT, MONTH) SNAPSHOT ----------
+  snapshots.forEach((snap, sIdx) => {
+    const monthIndex =
+      snap.cycleIndex != null ? snap.cycleIndex : sIdx;
+    const simDate =
+      snap.simDate instanceof Date ? snap.simDate : new Date(snap.simDate);
+
+    const stocks = Array.isArray(snap.stocks) ? snap.stocks : [];
+
+    stocks.forEach((row) => {
+      if (!row || !row.id || !row.stock) return;
+
+      const payload = {
+        ...row,
+        userRef,
+        simRunRef,
+        monthIndex,
+        simDate,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      // new doc per (run, month, account)
+      const docRef = simStocksColl.doc();
+      batch.set(docRef, payload);
+    });
+  });
+
+  // Commit all writes
+  await batch.commit();
+
+  return { simRunId: simRunRef.id };
+}
+
+module.exports = { writeSimOutputs };
