@@ -3,7 +3,12 @@
 3. CardBudget =
     min(
       max(100, 0.055 * CB),
-      max(100, 0.50 * LP)
+      max(100, 0.25 * LP)
     )
 
 4. simAssumedBudget = LP + CardBudget
+
+Meaning:
+The assumed budget should be equal to loan payments, plus an amount of card balance.
+The amount of card balance is the MINIMUM of 100 (the "floor") or 5.5% of card balance or 25% of loan payments.
+That way the card payment used for the budget is never greater than 25% of loan payments.
