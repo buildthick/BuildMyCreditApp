@@ -1,0 +1,9 @@
+1. LP = LoanPayments
+2. CB = CardBalance
+3. CardBudget =
+    min(
+      max(100, 0.055 * CB),
+      max(100, 0.50 * LP)
+    )
+
+4. SimAssumedBudget = LP + CardBudget
