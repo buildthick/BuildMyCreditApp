@@ -6,4 +6,4 @@
       max(100, 0.50 * LP)
     )
 
-4. SimAssumedBudget = LP + CardBudget
+4. simAssumedBudget = LP + CardBudget
