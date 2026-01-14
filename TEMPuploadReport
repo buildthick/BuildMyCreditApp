@@ -1,0 +1,163 @@
+const functions = require('firebase-functions/v1');
+const admin = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+function extractBucketAndObjectPath(downloadURL) {
+  // Expected:
+  // https://firebasestorage.googleapis.com/v0/b/<bucket>/o/<ENCODED_OBJECT_PATH>?alt=media&token=...
+  let u;
+  try {
+    u = new URL(String(downloadURL));
+  } catch (e) {
+    throw new functions.https.HttpsError('invalid-argument', 'downloadURL is not a valid URL.');
+  }
+
+  const parts = u.pathname.split('/').filter(Boolean);
+  // ["v0","b","<bucket>","o","<encoded...>"]
+  const bIndex = parts.indexOf('b');
+  const oIndex = parts.indexOf('o');
+
+  if (bIndex === -1 || !parts[bIndex + 1] || oIndex === -1 || !parts[oIndex + 1]) {
+    throw new functions.https.HttpsError(
+      'invalid-argument',
+      'downloadURL does not match expected Firebase Storage download URL format.'
+    );
+  }
+
+  const bucket = parts[bIndex + 1];
+  const encodedObjectPath = parts.slice(oIndex + 1).join('/'); // preserve any '/' in object path
+  const objectPath = decodeURIComponent(encodedObjectPath);
+
+  return { bucket, objectPath };
+}
+
+exports.uploadReport = functions.region('us-central1').https.onCall(async (data, context) => {
+  if (!context.auth || !context.auth.uid) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated.');
+  }
+
+  const uid = context.auth.uid;
+  const downloadURL = data && data.downloadURL ? String(data.downloadURL) : null;
+  if (!downloadURL) {
+    throw new functions.https.HttpsError('invalid-argument', 'Missing required parameter: downloadURL');
+  }
+
+  const { bucket: bucketFromUrl, objectPath: srcPath } = extractBucketAndObjectPath(downloadURL);
+
+  // SECURITY: must be the authenticated user's upload path
+  const allowedPrefix = `users/${uid}/uploads/`;
+  if (!srcPath.startsWith(allowedPrefix)) {
+    throw new functions.https.HttpsError(
+      'permission-denied',
+      'The provided file does not belong to the authenticated user.'
+    );
+  }
+
+  // Basic file validation
+  if (!srcPath.toLowerCase().endsWith('.pdf')) {
+    throw new functions.https.HttpsError('invalid-argument', 'Only .pdf files are supported.');
+  }
+
+  // Prevent accidentally passing a URL for something already in /uploads/report/
+  if (srcPath.startsWith(`users/${uid}/uploads/report/`)) {
+    throw new functions.https.HttpsError('failed-precondition', 'File is already in uploads/report.');
+  }
+
+  const bucket = admin.storage().bucket(); // default project bucket
+  const srcFile = bucket.file(srcPath);
+
+  // Confirm source exists
+  const [exists] = await srcFile.exists();
+  if (!exists) {
+    throw new functions.https.HttpsError('not-found', 'Source file not found in Storage.');
+  }
+
+  // Destination: /uploads/report/<same filename>
+  const srcFileName = srcPath.split('/').pop(); // e.g. 1768417658690000.pdf
+  const reportPrefix = `users/${uid}/uploads/report/`;
+  const destPath = `${reportPrefix}${srcFileName}`;
+  const destFile = bucket.file(destPath);
+
+  // 1) Clear any existing files in /uploads/report/ (so you never accumulate)
+  // You said you'll later add time-based deletion; for now we "check + delete if anything".
+  try {
+    const [existing] = await bucket.getFiles({ prefix: reportPrefix });
+    await Promise.all(
+      existing.map(async (f) => {
+        if (f?.name && f.name.startsWith(reportPrefix)) {
+          await f.delete();
+        }
+      })
+    );
+  } catch (e) {
+    console.error('Failed to delete existing report files:', { uid, reportPrefix, err: e });
+    throw new functions.https.HttpsError('internal', 'Failed to clear existing report files.');
+  }
+
+  // 2) Copy to /uploads/report/ then delete original upload file
+  try {
+    await srcFile.copy(destFile);
+    await srcFile.delete();
+  } catch (e) {
+    console.error('Storage move failed:', { srcPath, destPath, err: e });
+    throw new functions.https.HttpsError('internal', 'Failed to move file in Storage.');
+  }
+
+  // 3) Create upload run doc
+  const uploadRef = admin
+    .firestore()
+    .collection('users')
+    .doc(uid)
+    .collection('reportUploads')
+    .doc();
+
+  const gsUri = `gs://${bucket.name}/${destPath}`;
+
+  try {
+    await uploadRef.set({
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      status: 'moved',
+      source: 'myFico_B1',
+
+      // pointers
+      reportMostRecentGsUri: gsUri,
+      reportMostRecentObjectPath: destPath,
+
+      // provenance/debug
+      srcObjectPath: srcPath,
+      downloadUrlBucket: bucketFromUrl || null,
+      parserVersion: 'b1_v0_shell',
+    });
+  } catch (e) {
+    console.error('Failed to write upload run doc:', { uid, err: e });
+    throw new functions.https.HttpsError('internal', 'Moved file, but failed to create upload run doc.');
+  }
+
+  // 4) Write pointer to user doc
+  try {
+    await admin.firestore().collection('users').doc(uid).set(
+      {
+        reportMostRecent: gsUri,               // string, gs://... pointer
+        reportMostRecentObjectPath: destPath, // string helper
+        reportMostRecentUploadId: uploadRef.id,
+        reportMostRecentUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  } catch (e) {
+    console.error('Failed to write user pointer fields:', { uid, destPath, err: e });
+    throw new functions.https.HttpsError('internal', 'Moved file, but failed to write user pointer fields.');
+  }
+
+  // 5) NEXT STEP (later): parse PDF -> write snapshot rows
+  // users/{uid}/reportUploads/{uploadId}/stocks_conso_report_uploads/{docId}
+  // (schema: reuse user_stocks_conso fields + add uploadId/source/fingerprint)  :contentReference[oaicite:1]{index=1}
+
+  return {
+    ok: true,
+    uploadId: uploadRef.id,
+    movedTo: destPath,
+    reportMostRecent: gsUri,
+  };
+});
