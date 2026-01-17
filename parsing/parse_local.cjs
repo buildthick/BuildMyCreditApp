@@ -1,23 +1,21 @@
 /**
- * parse_local.cjs (CLEAN - CANONICAL PAYMENT HISTORY)
+ * parse_local.cjs (NORMALIZED NUMBERS + FIRESTORE-STYLE TIMESTAMPS)
  *
- * Local parser for myFICO 1-Bureau (Equifax) "Condensed" PDF
- *
- * - Uses pdfjs-dist (coordinate-aware) to reconstruct stable logical lines
- * - Splits Accounts section into account blocks anchored on "Last Updated"
- * - Extracts core and detail fields
- * - Payment history: stores ONE canonical field:
- *     paymentHistory: [{ bureau, year, month, code }, ...]
- *
- * Run:
- *   node parse_local.cjs
- *   node parse_local.cjs "/full/path/to/your.pdf"
+ * - pdfjs-dist coordinate extraction -> stable logical lines
+ * - Splits Accounts section into blocks anchored on "Last Updated"
+ * - Extracts fields and normalizes:
+ *    - Numbers: digits only (Number) for money fields
+ *    - Dates: Firestore-style timestamp objects {seconds, nanoseconds}
+ *      at midnight America/New_York for that date
+ * - Payment history: ONE canonical field:
+ *    paymentHistory: [{ bureau, year, month, code }, ...]
  */
 
 const fs = require("fs");
 const path = require("path");
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const TZ = "America/New_York";
 
 /* =========================
    String cleanup helpers
@@ -40,8 +38,7 @@ function cleanValue(s) {
   if (/^–+$/.test(s)) return null;
   if (/^-\s*-\s*$/.test(s)) return null;
   if (/^(none|n\/a)$/i.test(s)) return null;
-  if (s === "–") return null;
-  if (s === "-") return null;
+  if (s === "–" || s === "-") return null;
 
   return s;
 }
@@ -190,7 +187,6 @@ function extractLabelValue(lines, label) {
 
   // Case A: "Label Value"
   const reSpaced = new RegExp("^" + lbl + "\\s+(.*)$", "i");
-
   // Case B: "LabelValue" (no space)
   const reConcat = new RegExp("^" + lbl + "(.*)$", "i");
 
@@ -217,6 +213,109 @@ function extractFollowingLineAfterLabel(lines, label) {
 }
 
 /* =========================
+   Normalization: numbers
+========================= */
+
+function parseMoneyToNumber(v) {
+  v = cleanValue(v);
+  if (!v) return null;
+
+  // Handle parentheses negatives: ($1,234.56)
+  let neg = false;
+  if (/^\(.*\)$/.test(v)) {
+    neg = true;
+    v = v.slice(1, -1);
+  }
+
+  // Remove currency symbols/commas/spaces
+  v = v.replace(/[$,\s]/g, "");
+
+  // Some fields might be empty dashes already handled; if still not numeric, return null
+  if (!/^-?\d+(\.\d+)?$/.test(v)) return null;
+
+  const num = Number(v);
+  if (!Number.isFinite(num)) return null;
+  return neg ? -num : num;
+}
+
+/* =========================
+   Normalization: Firestore-style timestamps
+   - Convert MM/YYYY -> day=1
+   - Convert MM/DD/YYYY -> given day
+   - Store as {seconds, nanoseconds} at 00:00 local in America/New_York
+========================= */
+
+function tzOffsetMillisAt(utcMillis, timeZone) {
+  const d = new Date(utcMillis);
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
+  const parts = Object.fromEntries(
+    fmt.formatToParts(d)
+      .filter((p) => p.type !== "literal")
+      .map((p) => [p.type, p.value])
+  );
+
+  const ly = Number(parts.year);
+  const lm = Number(parts.month);
+  const ld = Number(parts.day);
+  const lh = Number(parts.hour);
+  const lmin = Number(parts.minute);
+  const ls = Number(parts.second);
+
+  // Interpret the local wall-clock parts as if they were UTC to get a comparable epoch
+  const localAsUtc = Date.UTC(ly, lm - 1, ld, lh, lmin, ls);
+  return localAsUtc - utcMillis; // offset such that: local = utc + offset
+}
+
+function zonedMidnightUtcMillis(y, m, d, timeZone) {
+  const base = Date.UTC(y, m - 1, d, 0, 0, 0);
+
+  // iterate twice for DST correctness
+  let utc = base - tzOffsetMillisAt(base, timeZone);
+  utc = base - tzOffsetMillisAt(utc, timeZone);
+  return utc;
+}
+
+function parseDateToFsTimestamp(v) {
+  v = cleanValue(v);
+  if (!v) return null;
+
+  // MM/YYYY
+  let m = v.match(/^(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const mm = Number(m[1]);
+    const yy = Number(m[2]);
+    if (mm < 1 || mm > 12) return null;
+    const utcMillis = zonedMidnightUtcMillis(yy, mm, 1, TZ);
+    return { seconds: Math.floor(utcMillis / 1000), nanoseconds: 0 };
+  }
+
+  // MM/DD/YYYY
+  m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const mm = Number(m[1]);
+    const dd = Number(m[2]);
+    const yy = Number(m[3]);
+    if (mm < 1 || mm > 12) return null;
+    if (dd < 1 || dd > 31) return null;
+
+    const utcMillis = zonedMidnightUtcMillis(yy, mm, dd, TZ);
+    return { seconds: Math.floor(utcMillis / 1000), nanoseconds: 0 };
+  }
+
+  return null;
+}
+
+/* =========================
    Payment history
    Canonical output: paymentHistory (flat monthly list)
 ========================= */
@@ -236,9 +335,6 @@ function parsePaymentHistoryRows(blockLines) {
 
   const slice = blockLines.slice(startIdx + 1, endIdx).map(cleanDashes).filter(Boolean);
 
-  // pattern:
-  // 2025 Jan Feb ... Dec
-  // Equifax OK OK ... OK
   for (let i = 0; i < slice.length - 1; i++) {
     const yearRow = slice[i];
     const bureauRow = slice[i + 1];
@@ -255,10 +351,10 @@ function parsePaymentHistoryRows(blockLines) {
     if (tokens.length < 12) continue;
 
     const months = {};
-    for (let m = 0; m < 12; m++) months[MONTHS[m]] = tokens[m] ?? null;
+    for (let mm = 0; mm < 12; mm++) months[MONTHS[mm]] = tokens[mm] ?? null;
 
     out.push({ bureau, year, months });
-    i += 1; // consume bureau row
+    i += 1;
   }
 
   return out;
@@ -325,42 +421,52 @@ const pdfPath = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_PDF_PA
     const blockLines = b.lines.map(cleanDashes);
     const lender = b.lender || guessLenderFromBlock(blockLines);
 
-    // Core
-    const lastUpdated = extractLabelValue(blockLines, "Last Updated");
+    // Raw extracted strings
+    const lastUpdatedRaw = extractLabelValue(blockLines, "Last Updated");
 
-    // Payment Status is header-only in this PDF: "Payment Status" then next line value
-    let paymentStatus = extractLabelValue(blockLines, "Payment Status");
-    if (!paymentStatus) paymentStatus = extractFollowingLineAfterLabel(blockLines, "Payment Status");
-    paymentStatus = cleanValue(paymentStatus);
+    let paymentStatusRaw = extractLabelValue(blockLines, "Payment Status");
+    if (!paymentStatusRaw) paymentStatusRaw = extractFollowingLineAfterLabel(blockLines, "Payment Status");
 
-    const worstDelinquency = extractLabelValue(blockLines, "Worst Delinquency");
+    const worstDelinquencyRaw = extractLabelValue(blockLines, "Worst Delinquency");
 
-    const balance = extractLabelValue(blockLines, "Balance");
-    const creditLimit = extractLabelValue(blockLines, "Credit Limit");
+    const balanceRaw = extractLabelValue(blockLines, "Balance");
+    const creditLimitRaw = extractLabelValue(blockLines, "Credit Limit");
 
-    const openDate = extractLabelValue(blockLines, "Open Date");
-    const closedDate = extractLabelValue(blockLines, "Closed Date");
-    const lastActivity = extractLabelValue(blockLines, "Last Activity");
+    const openDateRaw = extractLabelValue(blockLines, "Open Date");
+    const closedDateRaw = extractLabelValue(blockLines, "Closed Date");
+    const lastActivityRaw = extractLabelValue(blockLines, "Last Activity");
 
-    // Details
     const loanType = extractLabelValue(blockLines, "Loan Type");
     const responsibility = extractLabelValue(blockLines, "Responsibility");
     const companyName = extractLabelValue(blockLines, "Company Name");
     const accountNumber = extractLabelValue(blockLines, "Account Number");
-    const highBalance = extractLabelValue(blockLines, "High Balance");
 
-    // These are often "–" in your report, but keep them anyway
-    let scheduledPayment = extractLabelValue(blockLines, "Scheduled Payment");
-    if (!scheduledPayment) scheduledPayment = extractFollowingLineAfterLabel(blockLines, "Scheduled Payment");
-    scheduledPayment = cleanValue(scheduledPayment);
+    const highBalanceRaw = extractLabelValue(blockLines, "High Balance");
+
+    let scheduledPaymentRaw = extractLabelValue(blockLines, "Scheduled Payment");
+    if (!scheduledPaymentRaw) scheduledPaymentRaw = extractFollowingLineAfterLabel(blockLines, "Scheduled Payment");
 
     let terms = extractLabelValue(blockLines, "Terms");
     if (!terms) terms = extractFollowingLineAfterLabel(blockLines, "Terms");
+
+    // NORMALIZED
+    const lastUpdated = parseDateToFsTimestamp(lastUpdatedRaw);
+    const openDate = parseDateToFsTimestamp(openDateRaw);
+    const closedDate = parseDateToFsTimestamp(closedDateRaw);
+    const lastActivity = parseDateToFsTimestamp(lastActivityRaw);
+
+    const balance = parseMoneyToNumber(balanceRaw);
+    const creditLimit = parseMoneyToNumber(creditLimitRaw);
+    const highBalance = parseMoneyToNumber(highBalanceRaw);
+    const scheduledPayment = parseMoneyToNumber(scheduledPaymentRaw);
+
+    const paymentStatus = cleanValue(paymentStatusRaw);
+    const worstDelinquency = cleanValue(worstDelinquencyRaw);
     terms = cleanValue(terms);
 
-    // Payment history (canonical flat months list)
-    const paymentHistoryRows = parsePaymentHistoryRows(blockLines); // internal only
-    const paymentHistory = flattenPaymentHistory(paymentHistoryRows); // output
+    // Payment history
+    const paymentHistoryRows = parsePaymentHistoryRows(blockLines); // internal
+    const paymentHistory = flattenPaymentHistory(paymentHistoryRows); // canonical
 
     // Warnings
     const warnings = [];
@@ -377,72 +483,53 @@ const pdfPath = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_PDF_PA
 
       lender,
 
+      // normalized timestamps
       lastUpdated,
-      paymentStatus,
-      worstDelinquency,
-
-      balance,
-      creditLimit,
-
       openDate,
       closedDate,
       lastActivity,
 
+      // strings
+      paymentStatus,
+      worstDelinquency,
       loanType,
       responsibility,
       companyName,
       accountNumber,
-      highBalance,
-      scheduledPayment,
       terms,
 
-      // CANONICAL
+      // normalized numbers
+      balance,
+      creditLimit,
+      highBalance,
+      scheduledPayment,
+
+      // canonical payment history
       paymentHistory,
 
       warnings,
 
-      // debug only; remove before CF write
+      // debug only
       _blockLines: blockLines,
+      _raw: {
+        lastUpdatedRaw,
+        openDateRaw,
+        closedDateRaw,
+        lastActivityRaw,
+        balanceRaw,
+        creditLimitRaw,
+        highBalanceRaw,
+        scheduledPaymentRaw,
+      },
     };
   });
 
-  // Debug blocks
-  console.log("\n--- DEBUG TRUIST BLOCK (first 160 lines) ---");
-  const tr = accounts.find((a) => (a.lender || "").toLowerCase().includes("truist"));
-  if (tr) console.log(tr._blockLines.slice(0, 160).join("\n"));
-
-  console.log("\n--- DEBUG NELNET BLOCK (first 200 lines) ---");
-  const nn = accounts.find((a) => (a.lender || "").toLowerCase().includes("nelnet"));
-  if (nn) console.log(nn._blockLines.slice(0, 200).join("\n"));
-
-  // Human-readable summary
-  for (const a of accounts) {
-    console.log("=".repeat(90));
-    console.log(`${a.index}. ${a.lender} (page ${a.startPageNumber})`);
-    console.log("Last Updated:", a.lastUpdated);
-    console.log("Payment Status:", a.paymentStatus);
-    console.log("Worst Delinquency:", a.worstDelinquency);
-    console.log("Loan Type:", a.loanType);
-    console.log("Balance:", a.balance);
-    console.log("Credit Limit:", a.creditLimit);
-    console.log("Open Date:", a.openDate);
-    console.log("Closed Date:", a.closedDate);
-    console.log("Last Activity:", a.lastActivity);
-    console.log("Company Name:", a.companyName);
-    console.log("Account Number:", a.accountNumber);
-    console.log("High Balance:", a.highBalance);
-    console.log("Scheduled Payment:", a.scheduledPayment);
-    console.log("Terms:", a.terms);
-    console.log("paymentHistory months:", a.paymentHistory?.length ?? 0);
-    if (a.warnings.length) console.log("WARN:", a.warnings.join(", "));
-  }
-
   console.log("\nSanity check lenders + paymentHistory months:");
-  accounts.forEach((a) => console.log(`${a.index} ${a.lender} months:${a.paymentHistory?.length ?? 0}`));
+  accounts.forEach((a) => console.log(`${a.index} ${a.lender} months:${a.paymentHistory?.length ?? 0} warnings:${a.warnings.length}`));
 
-  // JSON payload (strip _blockLines for clean output)
-  console.log("\n--- JSON PAYLOAD (ready for Firestore later; _blockLines removed) ---");
-  const payload = accounts.map(({ _blockLines, ...rest }) => rest);
+  // JSON payload (strip debug fields)
+  console.log("\n--- JSON PAYLOAD (normalized; debug removed) ---");
+  const payload = accounts.map(({ _blockLines, _raw, ...rest }) => rest);
   console.log(JSON.stringify(payload, null, 2));
 })().catch((err) => {
   console.error("\nFatal error:", err);
