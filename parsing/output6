@@ -1,4 +1,6 @@
+Last login: Sat Jan 17 17:58:06 on ttys003
 noahgomez@Mac bmca-backend-parsing-Node % node parse_local.cjs
+
 accounts_idx: 134 page: 19
 collections_idx: 411 page: 35
 blocks: 8
@@ -1787,3 +1789,4 @@ Sanity check lenders + paymentHistory months:
     "warnings": []
   }
 ]
+noahgomez@Mac bmca-backend-parsing-Node % 
