@@ -1,0 +1,522 @@
+const functions = require('firebase-functions/v1');
+const admin = require('firebase-admin');
+// DO NOT call admin.initializeApp()
+
+const crypto = require('crypto');
+const pdfParse = require('pdf-parse'); // v1.1.1 ONLY
+
+/* =========================
+   Helpers
+========================= */
+
+function sha1(input) {
+  return crypto.createHash('sha1').update(String(input)).digest('hex');
+}
+
+function parseMoney(line) {
+  if (!line) return null;
+  if (/–|---|—|- - -/.test(line)) return null;
+  const m = line.match(/\$?\s*([\d,]+)/);
+  if (!m) return null;
+  return parseInt(m[1].replace(/,/g, ''), 10);
+}
+
+function parseMMYYYY(val) {
+  const m = String(val || '').match(/^(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const mm = String(m[1]).padStart(2, '0');
+  return `${m[2]}-${mm}-01`;
+}
+
+function parseMDY(val) {
+  const m = String(val || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!m) return null;
+  let yyyy = m[3].length === 2
+    ? (parseInt(m[3], 10) >= 70 ? `19${m[3]}` : `20${m[3]}`)
+    : m[3];
+  const mm = String(m[1]).padStart(2, '0');
+  const dd = String(m[2]).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function extractBucketAndPath(downloadURL) {
+  const u = new URL(downloadURL);
+  const parts = u.pathname.split('/').filter(Boolean);
+  const bIdx = parts.indexOf('b');
+  const oIdx = parts.indexOf('o');
+  return {
+    bucket: parts[bIdx + 1],
+    path: decodeURIComponent(parts.slice(oIdx + 1).join('/')),
+  };
+}
+
+/* =========================
+   Section Segmentation
+========================= */
+
+function segmentSections(lines) {
+  // We only keep the 4 target sections, but we MUST stop when the next top-level header begins,
+  // otherwise inquiries will eat Personal Info, etc.
+  const START_HEADERS = {
+    ACCOUNTS: 'accounts',
+    COLLECTIONS: 'collections',
+    'PUBLIC RECORDS': 'publicRecords',
+    INQUIRIES: 'inquiries',
+  };
+
+  // These are "stop" headers — when we see these, we stop collecting current section.
+  // Add more later as needed; keep it conservative.
+  const STOP_HEADERS = new Set([
+    'PERSONAL INFO',
+    'PERSONAL INFORMATION',
+    'NEXT STEPS',
+    'FICO SCORE',
+    'FICO® SCORE',
+    'HOW TO READ THIS REPORT',
+    'OTHER FICO SCORE VERSIONS',
+    'PUBLIC RECORDS', // also a start, but acts as stop for collections
+    'COLLECTIONS',
+    'ACCOUNTS',
+    'INQUIRIES',
+  ]);
+
+  const sections = {
+    accounts: [],
+    collections: [],
+    publicRecords: [],
+    inquiries: [],
+  };
+
+  let current = null;
+
+  const norm = (s) => String(s || '').trim().toUpperCase();
+
+  for (const raw of lines) {
+    const line = String(raw || '').trim();
+    if (!line) continue;
+
+    const upper = norm(line);
+
+    // Start a section
+    if (START_HEADERS[upper]) {
+      current = START_HEADERS[upper];
+      continue;
+    }
+
+    // Stop collecting if we hit a stop header and we're currently inside a section
+    if (current && STOP_HEADERS.has(upper)) {
+      // if it's another start header, the start handler above will set current on next iteration anyway
+      current = null;
+      continue;
+    }
+
+    if (current) sections[current].push(line);
+  }
+
+  return sections;
+}
+
+/* =========================
+   Accounts Parsing
+========================= */
+
+function parseAccounts(lines, uid, uploadId) {
+  const docs = [];
+  const lates = [];
+  const errors = [];
+
+  let current = null;
+  let hasLate = false;
+
+  // Ensures unique account IDs even if lender/DOFRecord repeat or DOFRecord missing
+  let accountSeq = 0;
+
+
+  const flush = () => {
+    if (!current) return;
+
+    current.isCurrent = !hasLate;
+
+    accountSeq += 1;
+    const docId = sha1(`${uploadId}|account|${accountSeq}|${current.lender}|${current.DOFRecord || 'null'}`);
+
+
+    docs.push({
+      id: docId,
+      data: {
+        ...current,
+        userRef: admin.firestore().doc(`users/${uid}`),
+      },
+    });
+
+    current = null;
+    hasLate = false;
+  };
+
+  for (const line of lines) {
+    if (!line) continue;
+
+    const upper = line.toUpperCase();
+
+const isNoise =
+  /EQUIFAX\s+TRANSUNION\s+EXPERIAN/i.test(line) ||
+  upper.includes('NO COLLECTIONS') ||
+  upper.includes('NO PUBLIC RECORDS') ||
+  upper.includes('POSITIVE ITEMS') ||
+  upper.includes('NEGATIVE ITEMS') ||
+  upper.includes('RECENT ACCOUNTS') ||
+  upper.startsWith('HTTP') ||
+  upper.includes('SECURE.MYFICO.COM');
+
+const isFieldLabel =
+  /^(Loan Type|Balance|Credit Limit|Open Date|Days Late|Closed Date|Last Updated|Last Activity|Scheduled Payment|High Balance|Company Name|Account Number)\b/i.test(line);
+
+const isCandidateHeader =
+  !isNoise &&
+  !isFieldLabel &&
+  /[A-Z]/i.test(line) &&
+  line.length >= 3 &&
+  line.length <= 60 &&
+  !line.includes(',') &&
+  !/\d{3,}/.test(line);
+
+if (isCandidateHeader) {
+  flush();
+
+  const isClosed = /\bCLOSED\b/i.test(line);
+  current = {
+    stock: null,
+    subStock: null,
+    lender: line.replace(/\bCLOSED\b/i, '').trim(),
+    name: '-',
+    amountsOwed: null,
+    creditLimit: null,
+    DOFRecord: null,
+    isOpen: !isClosed,
+    isCurrent: true,
+  };
+  continue;
+}
+
+if (!current) continue;
+
+
+
+    if (line.startsWith('Loan Type')) {
+      const type = line.replace('Loan Type', '').trim();
+      if (/Credit Card/i.test(type)) {
+        current.stock = 'user_credit_cards';
+        current.subStock = 'Revolving';
+      } else {
+        current.stock = 'user_loans';
+        current.subStock = 'Installment';
+      }
+    }
+
+    if (line.startsWith('Balance')) current.amountsOwed = parseMoney(line);
+    if (line.startsWith('Credit Limit')) current.creditLimit = parseMoney(line);
+
+    if (line.startsWith('Open Date')) {
+      const val = line.replace('Open Date', '').trim();
+      current.DOFRecord = parseMMYYYY(val);
+      if (!current.DOFRecord) errors.push({ type: 'missing_open_date', lender: current.lender });
+    }
+
+        // Late detection: ONLY within the "Days Late" grid area
+    // We arm detection when we see the "Days Late" label, and disarm when we hit a new labeled field.
+    if (!current._inDaysLate && /^Days Late\b/i.test(line)) {
+      current._inDaysLate = true;
+      current._lateTokens = new Set();
+      continue;
+    }
+
+    if (current._inDaysLate) {
+      // Disarm when we hit another known field label (keeps it conservative)
+      if (/^(Balance|Credit Limit|Open Date|Closed Date|Last Updated|Last Activity|Scheduled Payment|High Balance|Loan Type|Company Name|Account Number)\b/i.test(line)) {
+        current._inDaysLate = false;
+
+        if (current._lateTokens && current._lateTokens.size > 0) {
+          hasLate = true;
+
+          // one doc per token (v1). We'll later map tokens to month columns if needed.
+          for (const tok of current._lateTokens) {
+            const lateId = sha1(`${uploadId}|late|${docId}|${tok}`);
+            lates.push({
+              id: lateId,
+              data: {
+                stock: 'user_credit_lates',
+                subStock: 'Late',
+                lender: current.lender,
+                severity: tok,
+                DOFRecord: null,
+                userRef: admin.firestore().doc(`users/${uid}`),
+              },
+            });
+          }
+        }
+
+        continue;
+      }
+
+      // Collect ONLY valid tokens; do not match "30" inside money.
+      const tokens = line.match(/\b(30|60|90|120|150|180|CO|D)\b/g);
+      if (tokens) tokens.forEach(t => current._lateTokens.add(t));
+      continue;
+    }
+
+  }
+
+  flush();
+  return { docs, lates, errors };
+}
+
+/* =========================
+   Inquiries Parsing
+========================= */
+
+function parseInquiries(lines, uid, uploadId) {
+  const docs = [];
+  let buffer = [];
+  let armed = false;
+
+  for (const line of lines) {
+    if (!line) continue;
+
+    // Arm parsing only once we enter the actual inquiry table area
+    if (/^Credit Inquiries\b/i.test(line)) {
+      armed = true;
+      buffer = [];
+      continue;
+    }
+    if (!armed) continue;
+
+    // Ignore bureau header noise & month headers
+    if (/Equifax|TransUnion|Experian/i.test(line)) continue;
+    if (/^[A-Za-z]+\s+\d{4}$/.test(line.trim())) continue; // e.g., "July 2025"
+
+    const m = line.match(/^(\d{1,2}\/\d{1,2}\/\d{4})$/);
+    if (m) {
+      const date = parseMDY(m[1]);
+
+      const lender = buffer.join(' ').replace(/\s+/g, ' ').trim();
+      buffer = [];
+
+      // Guard: lender must be non-empty and not obviously personal-info
+      if (!lender) continue;
+      if (/SSN|Address|Employer|Phone Number/i.test(lender)) continue;
+
+      const id = sha1(`${uploadId}|inq|${lender}|${date || 'null'}`);
+
+      docs.push({
+        id,
+        data: {
+          stock: 'user_hard_pulls',
+          subStock: 'Revolving',
+          lender,
+          name: '-',
+          DOFRecord: date,
+          userRef: admin.firestore().doc(`users/${uid}`),
+        },
+      });
+
+      continue;
+    }
+
+    buffer.push(line);
+  }
+
+  return docs;
+}
+
+
+/* =========================
+   Collections / Public Records
+========================= */
+
+function parseCollections(lines, uid, uploadId) {
+  const joined = lines.join(' ').toUpperCase();
+  if (!lines.length || joined.includes('NO COLLECTION')) {
+    return [{
+      id: sha1(`${uploadId}|collections|empty`),
+      data: {
+        stock: 'user_collections_3rd_party',
+        subStock: 'Collection',
+        isEmpty: true,
+        userRef: admin.firestore().doc(`users/${uid}`),
+      },
+    }];
+  }
+
+  // future: real collections parsing
+  return [];
+}
+
+
+function parsePublicRecords(lines, uid, uploadId) {
+  const joined = lines.join(' ').toUpperCase();
+  if (!lines.length || joined.includes('NO PUBLIC RECORD')) {
+    return [{
+      id: sha1(`${uploadId}|public|empty`),
+      data: {
+        stock: 'user_public_records',
+        subStock: 'PublicRecord',
+        isEmpty: true,
+        userRef: admin.firestore().doc(`users/${uid}`),
+      },
+    }];
+  }
+
+  // future: real public record parsing
+  return [];
+}
+
+
+/* =========================
+   Cloud Function
+========================= */
+
+exports.uploadReport = functions.region('us-central1').https.onCall(
+  async (data, context) => {
+    try {
+      if (!context.auth?.uid) {
+        throw new functions.https.HttpsError('unauthenticated');
+      }
+
+      const { downloadURL } = data || {};
+      const uid = context.auth.uid;
+
+      // uploadId is server-generated if not provided by client
+      const uploadId =
+        (data && typeof data.uploadId === 'string' && data.uploadId.trim())
+          ? data.uploadId.trim()
+          : crypto.randomBytes(12).toString('hex');
+
+      // Log inputs (safe: no full URL dump)
+      console.log('UPLOADREPORT_INPUTS', {
+        hasUploadId: !!(data && data.uploadId),
+        uploadIdType: typeof (data && data.uploadId),
+        generatedUploadId: uploadId,
+        hasDownloadURL: !!downloadURL,
+        downloadURLType: typeof downloadURL,
+      });
+
+      if (!downloadURL || typeof downloadURL !== 'string' || !downloadURL.trim()) {
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          'downloadURL must be a non-empty string.'
+        );
+      }
+
+      const { bucket, path } = extractBucketAndPath(downloadURL);
+
+      console.log('UPLOADREPORT_STORAGE_TARGET', {
+        bucketOk: !!bucket,
+        pathOk: !!path,
+        bucket: bucket || null,
+        pathPrefix: path ? path.slice(0, 60) : null,
+      });
+
+      if (!bucket || !String(bucket).trim()) {
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          'downloadURL did not contain a valid bucket.'
+        );
+      }
+      if (!path || !String(path).trim()) {
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          'downloadURL did not contain a valid object path.'
+        );
+      }
+
+      const storage = admin.storage().bucket(bucket);
+
+      const [buf] = await storage.file(path).download();
+      const parsed = await pdfParse(buf);
+      const text = parsed.text || '';
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+
+    const sections = segmentSections(lines);
+
+    const accountsRes = parseAccounts(sections.accounts, uid, uploadId);
+    const inquiries = parseInquiries(sections.inquiries, uid, uploadId);
+    const collections = parseCollections(sections.collections, uid, uploadId);
+    const publicRecords = parsePublicRecords(sections.publicRecords, uid, uploadId);
+
+const uploadRef = admin
+  .firestore()
+  .collection('users')
+  .doc(uid)
+  .collection('reportUploads')
+  .doc(uploadId);
+
+// 🔑 Ensure the parent doc EXISTS (prevents the "doc that isn't a doc" issue)
+await uploadRef.set(
+  {
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    source: 'myfico_equifax_b1',
+    status: 'parsed',
+  },
+  { merge: true }
+);
+
+const baseRef = uploadRef.collection('stocks_conso_report_uploads');
+
+const batch = admin.firestore().batch();
+
+
+    const allItems = [
+          ...accountsRes.docs,
+          ...accountsRes.lates,
+          ...inquiries,
+          ...collections,
+          ...publicRecords,
+        ];
+
+      if (allItems.length + 1 > 500) {
+        throw new functions.https.HttpsError(
+          'failed-precondition',
+          `Too many parsed docs (${allItems.length}) for a single batch`
+        );
+      }
+
+
+        allItems.forEach((d, idx) => {
+          let id = (d && d.id != null) ? String(d.id).trim() : '';
+
+          // Firestore requires a non-empty docId; fallback if parser produced a bad/empty id
+          if (!id) {
+            const seed = `${uploadId}|fallbacksConsoFallback|${idx}|${d?.data?.stock || 'unknown'}|${d?.data?.lender || 'no_lender'}`;
+            id = crypto.createHash('sha1').update(seed).digest('hex');
+            console.error('EMPTY_DOC_ID_FALLBACK_USED', { idx, seed });
+          }
+
+          batch.create(baseRef.doc(id), d.data);
+        });
+
+    batch.set(baseRef.doc('summary'), {
+      parserVersion: 'b1_v1_items_plus_summary',
+      counts: {
+        accounts: accountsRes.docs.length,
+        lates: accountsRes.lates.length,
+        inquiries: inquiries.length,
+      },
+      errors: accountsRes.errors,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+      await batch.commit();
+      await storage.file(path).delete();
+
+      return { ok: true, uploadId };
+    } catch (err) {
+      console.error('UPLOADREPORT_ERROR', {
+        message: err?.message || String(err),
+        code: err?.code || null,
+        stack: err?.stack || null,
+      });
+      throw err;
+    }
+  }
+);
