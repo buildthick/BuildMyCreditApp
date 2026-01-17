@@ -402,19 +402,44 @@ const pdfPath = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_PDF_PA
       linePages.push(p.pageNumber);
     }
   }
-
+  // Section boundaries (EMPTY-SAFE)
   const accountsIdx = lines.findIndex((l) => cleanDashes(l) === "ACCOUNTS");
-  const collectionsIdx = lines.findIndex((l, i) => i > accountsIdx && cleanDashes(l) === "COLLECTIONS");
+
+  // Prefer COLLECTIONS as the natural end of ACCOUNTS, but fall back to any later known section header.
+  let collectionsIdx = -1;
+  if (accountsIdx !== -1) {
+    const endHeaders = new Set([
+      "COLLECTIONS",
+      "PUBLIC RECORDS",
+      "INQUIRIES",
+      "PERSONAL INFO",
+      "NEXT STEPS",
+    ]);
+
+    for (let i = accountsIdx + 1; i < lines.length; i++) {
+      const t = cleanDashes(lines[i]);
+      if (endHeaders.has(t)) {
+        collectionsIdx = i;
+        break;
+      }
+    }
+
+    // If we didn't find any known header after ACCOUNTS, fall back to end-of-doc.
+    if (collectionsIdx === -1) collectionsIdx = lines.length;
+  }
 
   console.log("accounts_idx:", accountsIdx, "page:", linePages[accountsIdx] ?? null);
   console.log("collections_idx:", collectionsIdx, "page:", linePages[collectionsIdx] ?? null);
 
-  if (accountsIdx === -1 || collectionsIdx === -1 || collectionsIdx <= accountsIdx) {
-    console.error("Could not locate ACCOUNTS/COLLECTIONS section boundaries.");
-    process.exit(2);
+  let blocks = [];
+  if (accountsIdx === -1) {
+    console.warn("WARN: ACCOUNTS header not found. Returning 0 accounts (empty-safe).");
+  } else if (collectionsIdx <= accountsIdx + 1) {
+    console.warn("WARN: Could not locate a valid end boundary after ACCOUNTS. Returning 0 accounts (empty-safe).");
+  } else {
+    blocks = buildAccountBlocks(lines, linePages, accountsIdx, collectionsIdx);
   }
 
-  const blocks = buildAccountBlocks(lines, linePages, accountsIdx, collectionsIdx);
   console.log("blocks:", blocks.length);
 
   const accounts = blocks.map((b, idx) => {
