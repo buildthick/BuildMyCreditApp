@@ -307,7 +307,10 @@ const pdfPath = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_PDF_PA
 
     // Core
     const lastUpdated = extractLabelValue(blockLines, "Last Updated");
-    const paymentStatus = extractLabelValue(blockLines, "Payment Status");
+    let paymentStatus = extractLabelValue(blockLines, "Payment Status");
+    if (!paymentStatus) paymentStatus = extractFollowingLineAfterLabel(blockLines, "Payment Status");
+    paymentStatus = cleanValue(paymentStatus);
+
     const worstDelinquency = extractLabelValue(blockLines, "Worst Delinquency");
 
     const balance = extractLabelValue(blockLines, "Balance");
