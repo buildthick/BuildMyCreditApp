@@ -1,0 +1,2333 @@
+noahgomez@Mac bmca-backend-parsing-Node % node parse_local.cjs
+
+accounts_idx: 134 page: 19
+collections_idx: 411 page: 35
+blocks: 8
+
+--- DEBUG TRUIST BLOCK (first 160 lines) ---
+Truist Bank
+Last Updated 01/05/2026
+Payment Status
+Pays account as agreed
+Worst Delinquency None Reported
+Balance $0
+Credit Limit $5,700
+2-YEAR PAYMENT HISTORY
+2025 Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec
+Equifax OK OK OK OK OK OK OK OK OK OK OK OK
+2024 Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec
+Equifax OK OK OK OK OK OK OK OK OK OK OK OK
+MORE DETAILS
+Equifax TransUnion Experian
+Open Date 08/2015
+Last Activity 06/2025
+https://secure.my fi co.com/member/#/reports/standard/printable?rptid=84A87915-9BC4-4D8D-BB84-68A168D77897&section=cd 32/37
+1/15/26, 1:25 PM myFICO 1-Bureau Report (Equifax) - 1/13/2026 - Noah G Gomez
+Terms
+–
+Scheduled Payment
+–
+High Balance $443
+Loan Type Credit Card
+Responsibility Individual
+Company Name Truist Bank
+Account Number XXXXXXXXXXXX1522
+Comments
+–
+https://secure.my fi co.com/member/#/reports/standard/printable?rptid=84A87915-9BC4-4D8D-BB84-68A168D77897&section=cd 33/37
+1/15/26, 1:25 PM myFICO 1-Bureau Report (Equifax) - 1/13/2026 - Noah G Gomez
+Nelnet Loan Servicin
+CLOSED
+Equifax TransUnion Experian
+
+--- DEBUG NELNET BLOCK (first 200 lines) ---
+Nelnet Loan Servicin
+Last Updated 10/31/2020
+Payment Status
+Pays account as agreed
+Worst Delinquency None Reported
+Balance $0
+Credit Limit
+–
+2-YEAR PAYMENT HISTORY
+2020 Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec
+Equifax OK OK OK OK OK OK OK OK OK NR NR NR
+2019 Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec
+Equifax NR NR NR NR OK OK OK OK OK OK OK OK
+2018 Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec
+Equifax NR NR NR NR NR NR NR NR NR NR NR NR
+MORE DETAILS
+Equifax TransUnion Experian
+Closed Date 10/01/2020
+https://secure.my fi co.com/member/#/reports/standard/printable?rptid=84A87915-9BC4-4D8D-BB84-68A168D77897&section=cd 34/37
+1/15/26, 1:25 PM myFICO 1-Bureau Report (Equifax) - 1/13/2026 - Noah G Gomez
+Open Date 08/2013
+Last Activity 10/2020
+Terms
+–
+Scheduled Payment
+–
+High Balance $28,689
+Loan Type Student Loan
+Responsibility Individual
+Company Name Nelnet Loan Servicin
+Account Number XXXXXX8581
+Comments
+–
+==========================================================================================
+1. Fairwinds Credit Uni (page 20)
+Last Updated: 12/31/2025
+Payment Status: null
+Worst Delinquency: None Reported
+Loan Type: Vehicle Loan
+Balance: $6,948
+Credit Limit: null
+Open Date: 07/2025
+Closed Date: null
+Last Activity: 12/2025
+Company Name: Fairwinds Credit Uni
+Account Number: XXXXXXXX
+High Balance: $7,476
+Scheduled Payment: $145
+paymentHistoryRows: 3  | monthsFlat: 36
+WARN: missing_paymentStatus
+==========================================================================================
+2. American Express (page 22)
+Last Updated: 01/07/2026
+Payment Status: null
+Worst Delinquency: None Reported
+Loan Type: Credit Card
+Balance: $422
+Credit Limit: $30,000
+Open Date: 07/2025
+Closed Date: null
+Last Activity: 01/2026
+Company Name: American Express
+Account Number: XXXXXXXXXXXXX2083
+High Balance: $5,010
+Scheduled Payment: $40
+paymentHistoryRows: 2  | monthsFlat: 24
+WARN: missing_paymentStatus
+==========================================================================================
+3. Capital One Bank Usa (page 24)
+Last Updated: 01/02/2026
+Payment Status: null
+Worst Delinquency: None Reported
+Loan Type: Credit Card
+Balance: $1,086
+Credit Limit: $11,000
+Open Date: 05/2024
+Closed Date: null
+Last Activity: 01/2026
+Company Name: Capital One Bank Usa
+Account Number: XXXXXXXXXXXX
+High Balance: $2,401
+Scheduled Payment: $25
+paymentHistoryRows: 2  | monthsFlat: 24
+WARN: missing_paymentStatus
+==========================================================================================
+4. Discover Card (page 26)
+Last Updated: 06/06/2025
+Payment Status: null
+Worst Delinquency: None Reported
+Loan Type: Credit Card
+Balance: $0
+Credit Limit: $1,500
+Open Date: 06/2023
+Closed Date: 05/01/2025
+Last Activity: null
+Company Name: Discover Card
+Account Number: XXXXXXXXXXXX
+High Balance: $0
+Scheduled Payment: null
+paymentHistoryRows: 3  | monthsFlat: 36
+WARN: missing_paymentStatus
+==========================================================================================
+5. Capital One Bank Usa (page 28)
+Last Updated: 12/23/2025
+Payment Status: null
+Worst Delinquency: None Reported
+Loan Type: Credit Card
+Balance: $0
+Credit Limit: $1,000
+Open Date: 03/2023
+Closed Date: null
+Last Activity: 04/2025
+Company Name: Capital One Bank Usa
+Account Number: XXXXXXXXXXXX
+High Balance: $7
+Scheduled Payment: null
+paymentHistoryRows: 3  | monthsFlat: 36
+WARN: missing_paymentStatus
+==========================================================================================
+6. Apple Card - Gs Bank (page 30)
+Last Updated: 12/31/2025
+Payment Status: null
+Worst Delinquency: None Reported
+Loan Type: Credit Card
+Balance: $85
+Credit Limit: $9,000
+Open Date: 03/2023
+Closed Date: null
+Last Activity: 12/2025
+Company Name: Apple Card - Gs Bank
+Account Number: XXXXXXXXXXXX7489
+High Balance: $1,550
+Scheduled Payment: $25
+paymentHistoryRows: 3  | monthsFlat: 36
+WARN: missing_paymentStatus
+==========================================================================================
+7. Truist Bank (page 32)
+Last Updated: 01/05/2026
+Payment Status: null
+Worst Delinquency: None Reported
+Loan Type: Credit Card
+Balance: $0
+Credit Limit: $5,700
+Open Date: 08/2015
+Closed Date: null
+Last Activity: 06/2025
+Company Name: Truist Bank
+Account Number: XXXXXXXXXXXX1522
+High Balance: $443
+Scheduled Payment: null
+paymentHistoryRows: 2  | monthsFlat: 24
+WARN: missing_paymentStatus
+==========================================================================================
+8. Nelnet Loan Servicin (page 34)
+Last Updated: 10/31/2020
+Payment Status: null
+Worst Delinquency: None Reported
+Loan Type: Student Loan
+Balance: $0
+Credit Limit: null
+Open Date: 08/2013
+Closed Date: 10/01/2020
+Last Activity: 10/2020
+Company Name: Nelnet Loan Servicin
+Account Number: XXXXXX8581
+High Balance: $28,689
+Scheduled Payment: null
+paymentHistoryRows: 3  | monthsFlat: 36
+WARN: missing_paymentStatus
+
+Sanity check lenders + rows:
+1 Fairwinds Credit Uni rows:3 months:36
+2 American Express rows:2 months:24
+3 Capital One Bank Usa rows:2 months:24
+4 Discover Card rows:3 months:36
+5 Capital One Bank Usa rows:3 months:36
+6 Apple Card - Gs Bank rows:3 months:36
+7 Truist Bank rows:2 months:24
+8 Nelnet Loan Servicin rows:3 months:36
+
+--- JSON PAYLOAD (trim _blockLines before CF write) ---
+[
+  {
+    "index": 1,
+    "startPageNumber": 20,
+    "lender": "Fairwinds Credit Uni",
+    "lastUpdated": "12/31/2025",
+    "paymentStatus": null,
+    "worstDelinquency": "None Reported",
+    "balance": "$6,948",
+    "creditLimit": null,
+    "openDate": "07/2025",
+    "closedDate": null,
+    "lastActivity": "12/2025",
+    "loanType": "Vehicle Loan",
+    "responsibility": "Individual",
+    "companyName": "Fairwinds Credit Uni",
+    "accountNumber": "XXXXXXXX",
+    "highBalance": "$7,476",
+    "scheduledPayment": "$145",
+    "terms": "60 Months",
+    "paymentHistoryRows": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "months": {
+          "Jan": "NO",
+          "Feb": "NO",
+          "Mar": "NO",
+          "Apr": "NO",
+          "May": "NO",
+          "Jun": "NO",
+          "Jul": "OK",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "OK",
+          "Nov": "OK",
+          "Dec": "NR"
+        }
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "months": {
+          "Jan": "NO",
+          "Feb": "NO",
+          "Mar": "NO",
+          "Apr": "NO",
+          "May": "NO",
+          "Jun": "NO",
+          "Jul": "NO",
+          "Aug": "NO",
+          "Sep": "NO",
+          "Oct": "NO",
+          "Nov": "NO",
+          "Dec": "NO"
+        }
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "months": {
+          "Jan": "NR",
+          "Feb": "NR",
+          "Mar": "NR",
+          "Apr": "NR",
+          "May": "NR",
+          "Jun": "NR",
+          "Jul": "NR",
+          "Aug": "NR",
+          "Sep": "NR",
+          "Oct": "NR",
+          "Nov": "NR",
+          "Dec": "NO"
+        }
+      }
+    ],
+    "paymentHistoryMonths": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jan",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Feb",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Mar",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Apr",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "May",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jun",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jul",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Oct",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Nov",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Dec",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jan",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Feb",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Mar",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Apr",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "May",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jun",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jul",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Aug",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Sep",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Oct",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Nov",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Dec",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Jan",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Feb",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Mar",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Apr",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "May",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Jun",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Jul",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Aug",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Sep",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Oct",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Nov",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Dec",
+        "code": "NO"
+      }
+    ],
+    "warnings": [
+      "missing_paymentStatus"
+    ]
+  },
+  {
+    "index": 2,
+    "startPageNumber": 22,
+    "lender": "American Express",
+    "lastUpdated": "01/07/2026",
+    "paymentStatus": null,
+    "worstDelinquency": "None Reported",
+    "balance": "$422",
+    "creditLimit": "$30,000",
+    "openDate": "07/2025",
+    "closedDate": null,
+    "lastActivity": "01/2026",
+    "loanType": "Credit Card",
+    "responsibility": "Individual",
+    "companyName": "American Express",
+    "accountNumber": "XXXXXXXXXXXXX2083",
+    "highBalance": "$5,010",
+    "scheduledPayment": "$40",
+    "terms": null,
+    "paymentHistoryRows": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "months": {
+          "Jan": "NO",
+          "Feb": "NO",
+          "Mar": "NO",
+          "Apr": "NO",
+          "May": "NO",
+          "Jun": "NO",
+          "Jul": "NR",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "OK",
+          "Nov": "OK",
+          "Dec": "OK"
+        }
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "months": {
+          "Jan": "NO",
+          "Feb": "NO",
+          "Mar": "NO",
+          "Apr": "NO",
+          "May": "NO",
+          "Jun": "NO",
+          "Jul": "NO",
+          "Aug": "NO",
+          "Sep": "NO",
+          "Oct": "NO",
+          "Nov": "NO",
+          "Dec": "NO"
+        }
+      }
+    ],
+    "paymentHistoryMonths": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jan",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Feb",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Mar",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Apr",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "May",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jun",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jul",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Oct",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Nov",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Dec",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jan",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Feb",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Mar",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Apr",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "May",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jun",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jul",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Aug",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Sep",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Oct",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Nov",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Dec",
+        "code": "NO"
+      }
+    ],
+    "warnings": [
+      "missing_paymentStatus"
+    ]
+  },
+  {
+    "index": 3,
+    "startPageNumber": 24,
+    "lender": "Capital One Bank Usa",
+    "lastUpdated": "01/02/2026",
+    "paymentStatus": null,
+    "worstDelinquency": "None Reported",
+    "balance": "$1,086",
+    "creditLimit": "$11,000",
+    "openDate": "05/2024",
+    "closedDate": null,
+    "lastActivity": "01/2026",
+    "loanType": "Credit Card",
+    "responsibility": "Individual",
+    "companyName": "Capital One Bank Usa",
+    "accountNumber": "XXXXXXXXXXXX",
+    "highBalance": "$2,401",
+    "scheduledPayment": "$25",
+    "terms": null,
+    "paymentHistoryRows": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "months": {
+          "Jan": "OK",
+          "Feb": "OK",
+          "Mar": "OK",
+          "Apr": "OK",
+          "May": "OK",
+          "Jun": "OK",
+          "Jul": "OK",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "OK",
+          "Nov": "OK",
+          "Dec": "OK"
+        }
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "months": {
+          "Jan": "NO",
+          "Feb": "NO",
+          "Mar": "NO",
+          "Apr": "NO",
+          "May": "NO",
+          "Jun": "OK",
+          "Jul": "OK",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "OK",
+          "Nov": "OK",
+          "Dec": "OK"
+        }
+      }
+    ],
+    "paymentHistoryMonths": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jan",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Feb",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Mar",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Apr",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "May",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jun",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jul",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Oct",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Nov",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Dec",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jan",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Feb",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Mar",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Apr",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "May",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jun",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jul",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Oct",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Nov",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Dec",
+        "code": "OK"
+      }
+    ],
+    "warnings": [
+      "missing_paymentStatus"
+    ]
+  },
+  {
+    "index": 4,
+    "startPageNumber": 26,
+    "lender": "Discover Card",
+    "lastUpdated": "06/06/2025",
+    "paymentStatus": null,
+    "worstDelinquency": "None Reported",
+    "balance": "$0",
+    "creditLimit": "$1,500",
+    "openDate": "06/2023",
+    "closedDate": "05/01/2025",
+    "lastActivity": null,
+    "loanType": "Credit Card",
+    "responsibility": "Individual",
+    "companyName": "Discover Card",
+    "accountNumber": "XXXXXXXXXXXX",
+    "highBalance": "$0",
+    "scheduledPayment": null,
+    "terms": null,
+    "paymentHistoryRows": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "months": {
+          "Jan": "OK",
+          "Feb": "OK",
+          "Mar": "OK",
+          "Apr": "OK",
+          "May": "OK",
+          "Jun": "NR",
+          "Jul": "NR",
+          "Aug": "NR",
+          "Sep": "NR",
+          "Oct": "NR",
+          "Nov": "NR",
+          "Dec": "NR"
+        }
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "months": {
+          "Jan": "OK",
+          "Feb": "OK",
+          "Mar": "OK",
+          "Apr": "OK",
+          "May": "OK",
+          "Jun": "OK",
+          "Jul": "OK",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "OK",
+          "Nov": "OK",
+          "Dec": "OK"
+        }
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "months": {
+          "Jan": "NR",
+          "Feb": "NR",
+          "Mar": "NR",
+          "Apr": "NR",
+          "May": "NR",
+          "Jun": "NO",
+          "Jul": "OK",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "OK",
+          "Nov": "OK",
+          "Dec": "OK"
+        }
+      }
+    ],
+    "paymentHistoryMonths": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jan",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Feb",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Mar",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Apr",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "May",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jun",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jul",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Aug",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Sep",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Oct",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Nov",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Dec",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jan",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Feb",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Mar",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Apr",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "May",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jun",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jul",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Oct",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Nov",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Dec",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Jan",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Feb",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Mar",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Apr",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "May",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Jun",
+        "code": "NO"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Jul",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Oct",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Nov",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Dec",
+        "code": "OK"
+      }
+    ],
+    "warnings": [
+      "missing_paymentStatus"
+    ]
+  },
+  {
+    "index": 5,
+    "startPageNumber": 28,
+    "lender": "Capital One Bank Usa",
+    "lastUpdated": "12/23/2025",
+    "paymentStatus": null,
+    "worstDelinquency": "None Reported",
+    "balance": "$0",
+    "creditLimit": "$1,000",
+    "openDate": "03/2023",
+    "closedDate": null,
+    "lastActivity": "04/2025",
+    "loanType": "Credit Card",
+    "responsibility": "Individual",
+    "companyName": "Capital One Bank Usa",
+    "accountNumber": "XXXXXXXXXXXX",
+    "highBalance": "$7",
+    "scheduledPayment": null,
+    "terms": null,
+    "paymentHistoryRows": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "months": {
+          "Jan": "OK",
+          "Feb": "OK",
+          "Mar": "OK",
+          "Apr": "OK",
+          "May": "OK",
+          "Jun": "OK",
+          "Jul": "OK",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "OK",
+          "Nov": "OK",
+          "Dec": "NR"
+        }
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "months": {
+          "Jan": "OK",
+          "Feb": "OK",
+          "Mar": "OK",
+          "Apr": "OK",
+          "May": "OK",
+          "Jun": "OK",
+          "Jul": "OK",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "OK",
+          "Nov": "OK",
+          "Dec": "OK"
+        }
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "months": {
+          "Jan": "NR",
+          "Feb": "NR",
+          "Mar": "NR",
+          "Apr": "NR",
+          "May": "NR",
+          "Jun": "NR",
+          "Jul": "NR",
+          "Aug": "NR",
+          "Sep": "NR",
+          "Oct": "NR",
+          "Nov": "NR",
+          "Dec": "OK"
+        }
+      }
+    ],
+    "paymentHistoryMonths": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jan",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Feb",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Mar",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Apr",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "May",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jun",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jul",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Oct",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Nov",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Dec",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jan",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Feb",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Mar",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Apr",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "May",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jun",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jul",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Oct",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Nov",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Dec",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Jan",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Feb",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Mar",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Apr",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "May",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Jun",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Jul",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Aug",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Sep",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Oct",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Nov",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Dec",
+        "code": "OK"
+      }
+    ],
+    "warnings": [
+      "missing_paymentStatus"
+    ]
+  },
+  {
+    "index": 6,
+    "startPageNumber": 30,
+    "lender": "Apple Card - Gs Bank",
+    "lastUpdated": "12/31/2025",
+    "paymentStatus": null,
+    "worstDelinquency": "None Reported",
+    "balance": "$85",
+    "creditLimit": "$9,000",
+    "openDate": "03/2023",
+    "closedDate": null,
+    "lastActivity": "12/2025",
+    "loanType": "Credit Card",
+    "responsibility": "Individual",
+    "companyName": "Apple Card - Gs Bank",
+    "accountNumber": "XXXXXXXXXXXX7489",
+    "highBalance": "$1,550",
+    "scheduledPayment": "$25",
+    "terms": null,
+    "paymentHistoryRows": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "months": {
+          "Jan": "OK",
+          "Feb": "OK",
+          "Mar": "OK",
+          "Apr": "OK",
+          "May": "OK",
+          "Jun": "OK",
+          "Jul": "OK",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "OK",
+          "Nov": "OK",
+          "Dec": "NR"
+        }
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "months": {
+          "Jan": "OK",
+          "Feb": "OK",
+          "Mar": "OK",
+          "Apr": "OK",
+          "May": "OK",
+          "Jun": "OK",
+          "Jul": "OK",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "OK",
+          "Nov": "OK",
+          "Dec": "OK"
+        }
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "months": {
+          "Jan": "NR",
+          "Feb": "NR",
+          "Mar": "NR",
+          "Apr": "NR",
+          "May": "NR",
+          "Jun": "NR",
+          "Jul": "NR",
+          "Aug": "NR",
+          "Sep": "NR",
+          "Oct": "NR",
+          "Nov": "NR",
+          "Dec": "OK"
+        }
+      }
+    ],
+    "paymentHistoryMonths": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jan",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Feb",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Mar",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Apr",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "May",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jun",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jul",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Oct",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Nov",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Dec",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jan",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Feb",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Mar",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Apr",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "May",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jun",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jul",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Oct",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Nov",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Dec",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Jan",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Feb",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Mar",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Apr",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "May",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Jun",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Jul",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Aug",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Sep",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Oct",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Nov",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2023,
+        "month": "Dec",
+        "code": "OK"
+      }
+    ],
+    "warnings": [
+      "missing_paymentStatus"
+    ]
+  },
+  {
+    "index": 7,
+    "startPageNumber": 32,
+    "lender": "Truist Bank",
+    "lastUpdated": "01/05/2026",
+    "paymentStatus": null,
+    "worstDelinquency": "None Reported",
+    "balance": "$0",
+    "creditLimit": "$5,700",
+    "openDate": "08/2015",
+    "closedDate": null,
+    "lastActivity": "06/2025",
+    "loanType": "Credit Card",
+    "responsibility": "Individual",
+    "companyName": "Truist Bank",
+    "accountNumber": "XXXXXXXXXXXX1522",
+    "highBalance": "$443",
+    "scheduledPayment": null,
+    "terms": null,
+    "paymentHistoryRows": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "months": {
+          "Jan": "OK",
+          "Feb": "OK",
+          "Mar": "OK",
+          "Apr": "OK",
+          "May": "OK",
+          "Jun": "OK",
+          "Jul": "OK",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "OK",
+          "Nov": "OK",
+          "Dec": "OK"
+        }
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "months": {
+          "Jan": "OK",
+          "Feb": "OK",
+          "Mar": "OK",
+          "Apr": "OK",
+          "May": "OK",
+          "Jun": "OK",
+          "Jul": "OK",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "OK",
+          "Nov": "OK",
+          "Dec": "OK"
+        }
+      }
+    ],
+    "paymentHistoryMonths": [
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jan",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Feb",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Mar",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Apr",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "May",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jun",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Jul",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Oct",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Nov",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2025,
+        "month": "Dec",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jan",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Feb",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Mar",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Apr",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "May",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jun",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Jul",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Oct",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Nov",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2024,
+        "month": "Dec",
+        "code": "OK"
+      }
+    ],
+    "warnings": [
+      "missing_paymentStatus"
+    ]
+  },
+  {
+    "index": 8,
+    "startPageNumber": 34,
+    "lender": "Nelnet Loan Servicin",
+    "lastUpdated": "10/31/2020",
+    "paymentStatus": null,
+    "worstDelinquency": "None Reported",
+    "balance": "$0",
+    "creditLimit": null,
+    "openDate": "08/2013",
+    "closedDate": "10/01/2020",
+    "lastActivity": "10/2020",
+    "loanType": "Student Loan",
+    "responsibility": "Individual",
+    "companyName": "Nelnet Loan Servicin",
+    "accountNumber": "XXXXXX8581",
+    "highBalance": "$28,689",
+    "scheduledPayment": null,
+    "terms": null,
+    "paymentHistoryRows": [
+      {
+        "bureau": "Equifax",
+        "year": 2020,
+        "months": {
+          "Jan": "OK",
+          "Feb": "OK",
+          "Mar": "OK",
+          "Apr": "OK",
+          "May": "OK",
+          "Jun": "OK",
+          "Jul": "OK",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "NR",
+          "Nov": "NR",
+          "Dec": "NR"
+        }
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2019,
+        "months": {
+          "Jan": "NR",
+          "Feb": "NR",
+          "Mar": "NR",
+          "Apr": "NR",
+          "May": "OK",
+          "Jun": "OK",
+          "Jul": "OK",
+          "Aug": "OK",
+          "Sep": "OK",
+          "Oct": "OK",
+          "Nov": "OK",
+          "Dec": "OK"
+        }
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2018,
+        "months": {
+          "Jan": "NR",
+          "Feb": "NR",
+          "Mar": "NR",
+          "Apr": "NR",
+          "May": "NR",
+          "Jun": "NR",
+          "Jul": "NR",
+          "Aug": "NR",
+          "Sep": "NR",
+          "Oct": "NR",
+          "Nov": "NR",
+          "Dec": "NR"
+        }
+      }
+    ],
+    "paymentHistoryMonths": [
+      {
+        "bureau": "Equifax",
+        "year": 2020,
+        "month": "Jan",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2020,
+        "month": "Feb",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2020,
+        "month": "Mar",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2020,
+        "month": "Apr",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2020,
+        "month": "May",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2020,
+        "month": "Jun",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2020,
+        "month": "Jul",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2020,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2020,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2020,
+        "month": "Oct",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2020,
+        "month": "Nov",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2020,
+        "month": "Dec",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2019,
+        "month": "Jan",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2019,
+        "month": "Feb",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2019,
+        "month": "Mar",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2019,
+        "month": "Apr",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2019,
+        "month": "May",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2019,
+        "month": "Jun",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2019,
+        "month": "Jul",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2019,
+        "month": "Aug",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2019,
+        "month": "Sep",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2019,
+        "month": "Oct",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2019,
+        "month": "Nov",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2019,
+        "month": "Dec",
+        "code": "OK"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2018,
+        "month": "Jan",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2018,
+        "month": "Feb",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2018,
+        "month": "Mar",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2018,
+        "month": "Apr",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2018,
+        "month": "May",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2018,
+        "month": "Jun",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2018,
+        "month": "Jul",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2018,
+        "month": "Aug",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2018,
+        "month": "Sep",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2018,
+        "month": "Oct",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2018,
+        "month": "Nov",
+        "code": "NR"
+      },
+      {
+        "bureau": "Equifax",
+        "year": 2018,
+        "month": "Dec",
+        "code": "NR"
+      }
+    ],
+    "warnings": [
+      "missing_paymentStatus"
+    ]
+  }
+]
+noahgomez@Mac bmca-backend-parsing-Node %    
