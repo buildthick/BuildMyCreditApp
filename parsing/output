@@ -3,244 +3,46 @@ accounts_idx: 134 page: 19
 collections_idx: 411 page: 35
 blocks: 8
 
---- DEBUG TRUIST BLOCK (first 160 lines) ---
-Truist Bank
-Last Updated 01/05/2026
-Payment Status
-Pays account as agreed
-Worst Delinquency None Reported
-Balance $0
-Credit Limit $5,700
-2-YEAR PAYMENT HISTORY
-2025 Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec
-Equifax OK OK OK OK OK OK OK OK OK OK OK OK
-2024 Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec
-Equifax OK OK OK OK OK OK OK OK OK OK OK OK
-MORE DETAILS
-Equifax TransUnion Experian
-Open Date 08/2015
-Last Activity 06/2025
-https://secure.my fi co.com/member/#/reports/standard/printable?rptid=84A87915-9BC4-4D8D-BB84-68A168D77897&section=cd 32/37
-1/15/26, 1:25 PM myFICO 1-Bureau Report (Equifax) - 1/13/2026 - Noah G Gomez
-Terms
-–
-Scheduled Payment
-–
-High Balance $443
-Loan Type Credit Card
-Responsibility Individual
-Company Name Truist Bank
-Account Number XXXXXXXXXXXX1522
-Comments
-–
-https://secure.my fi co.com/member/#/reports/standard/printable?rptid=84A87915-9BC4-4D8D-BB84-68A168D77897&section=cd 33/37
-1/15/26, 1:25 PM myFICO 1-Bureau Report (Equifax) - 1/13/2026 - Noah G Gomez
-Nelnet Loan Servicin
-CLOSED
-Equifax TransUnion Experian
-
---- DEBUG NELNET BLOCK (first 200 lines) ---
-Nelnet Loan Servicin
-Last Updated 10/31/2020
-Payment Status
-Pays account as agreed
-Worst Delinquency None Reported
-Balance $0
-Credit Limit
-–
-2-YEAR PAYMENT HISTORY
-2020 Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec
-Equifax OK OK OK OK OK OK OK OK OK NR NR NR
-2019 Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec
-Equifax NR NR NR NR OK OK OK OK OK OK OK OK
-2018 Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec
-Equifax NR NR NR NR NR NR NR NR NR NR NR NR
-MORE DETAILS
-Equifax TransUnion Experian
-Closed Date 10/01/2020
-https://secure.my fi co.com/member/#/reports/standard/printable?rptid=84A87915-9BC4-4D8D-BB84-68A168D77897&section=cd 34/37
-1/15/26, 1:25 PM myFICO 1-Bureau Report (Equifax) - 1/13/2026 - Noah G Gomez
-Open Date 08/2013
-Last Activity 10/2020
-Terms
-–
-Scheduled Payment
-–
-High Balance $28,689
-Loan Type Student Loan
-Responsibility Individual
-Company Name Nelnet Loan Servicin
-Account Number XXXXXX8581
-Comments
-–
-==========================================================================================
-1. Fairwinds Credit Uni (page 20)
-Last Updated: 12/31/2025
-Payment Status: Pays account as agreed
-Worst Delinquency: None Reported
-Loan Type: Vehicle Loan
-Balance: $6,948
-Credit Limit: null
-Open Date: 07/2025
-Closed Date: null
-Last Activity: 12/2025
-Company Name: Fairwinds Credit Uni
-Account Number: XXXXXXXX
-High Balance: $7,476
-Scheduled Payment: $145
-Terms: 60 Months
-paymentHistory months: 36
-==========================================================================================
-2. American Express (page 22)
-Last Updated: 01/07/2026
-Payment Status: Pays account as agreed
-Worst Delinquency: None Reported
-Loan Type: Credit Card
-Balance: $422
-Credit Limit: $30,000
-Open Date: 07/2025
-Closed Date: null
-Last Activity: 01/2026
-Company Name: American Express
-Account Number: XXXXXXXXXXXXX2083
-High Balance: $5,010
-Scheduled Payment: $40
-Terms: null
-paymentHistory months: 24
-==========================================================================================
-3. Capital One Bank Usa (page 24)
-Last Updated: 01/02/2026
-Payment Status: Pays account as agreed
-Worst Delinquency: None Reported
-Loan Type: Credit Card
-Balance: $1,086
-Credit Limit: $11,000
-Open Date: 05/2024
-Closed Date: null
-Last Activity: 01/2026
-Company Name: Capital One Bank Usa
-Account Number: XXXXXXXXXXXX
-High Balance: $2,401
-Scheduled Payment: $25
-Terms: null
-paymentHistory months: 24
-==========================================================================================
-4. Discover Card (page 26)
-Last Updated: 06/06/2025
-Payment Status: Pays account as agreed
-Worst Delinquency: None Reported
-Loan Type: Credit Card
-Balance: $0
-Credit Limit: $1,500
-Open Date: 06/2023
-Closed Date: 05/01/2025
-Last Activity: null
-Company Name: Discover Card
-Account Number: XXXXXXXXXXXX
-High Balance: $0
-Scheduled Payment: null
-Terms: null
-paymentHistory months: 36
-==========================================================================================
-5. Capital One Bank Usa (page 28)
-Last Updated: 12/23/2025
-Payment Status: Pays account as agreed
-Worst Delinquency: None Reported
-Loan Type: Credit Card
-Balance: $0
-Credit Limit: $1,000
-Open Date: 03/2023
-Closed Date: null
-Last Activity: 04/2025
-Company Name: Capital One Bank Usa
-Account Number: XXXXXXXXXXXX
-High Balance: $7
-Scheduled Payment: null
-Terms: null
-paymentHistory months: 36
-==========================================================================================
-6. Apple Card - Gs Bank (page 30)
-Last Updated: 12/31/2025
-Payment Status: Pays account as agreed
-Worst Delinquency: None Reported
-Loan Type: Credit Card
-Balance: $85
-Credit Limit: $9,000
-Open Date: 03/2023
-Closed Date: null
-Last Activity: 12/2025
-Company Name: Apple Card - Gs Bank
-Account Number: XXXXXXXXXXXX7489
-High Balance: $1,550
-Scheduled Payment: $25
-Terms: null
-paymentHistory months: 36
-==========================================================================================
-7. Truist Bank (page 32)
-Last Updated: 01/05/2026
-Payment Status: Pays account as agreed
-Worst Delinquency: None Reported
-Loan Type: Credit Card
-Balance: $0
-Credit Limit: $5,700
-Open Date: 08/2015
-Closed Date: null
-Last Activity: 06/2025
-Company Name: Truist Bank
-Account Number: XXXXXXXXXXXX1522
-High Balance: $443
-Scheduled Payment: null
-Terms: null
-paymentHistory months: 24
-==========================================================================================
-8. Nelnet Loan Servicin (page 34)
-Last Updated: 10/31/2020
-Payment Status: Pays account as agreed
-Worst Delinquency: None Reported
-Loan Type: Student Loan
-Balance: $0
-Credit Limit: null
-Open Date: 08/2013
-Closed Date: 10/01/2020
-Last Activity: 10/2020
-Company Name: Nelnet Loan Servicin
-Account Number: XXXXXX8581
-High Balance: $28,689
-Scheduled Payment: null
-Terms: null
-paymentHistory months: 36
-
 Sanity check lenders + paymentHistory months:
-1 Fairwinds Credit Uni months:36
-2 American Express months:24
-3 Capital One Bank Usa months:24
-4 Discover Card months:36
-5 Capital One Bank Usa months:36
-6 Apple Card - Gs Bank months:36
-7 Truist Bank months:24
-8 Nelnet Loan Servicin months:36
+1 Fairwinds Credit Uni months:36 warnings:0
+2 American Express months:24 warnings:0
+3 Capital One Bank Usa months:24 warnings:0
+4 Discover Card months:36 warnings:0
+5 Capital One Bank Usa months:36 warnings:0
+6 Apple Card - Gs Bank months:36 warnings:0
+7 Truist Bank months:24 warnings:0
+8 Nelnet Loan Servicin months:36 warnings:0
 
---- JSON PAYLOAD (ready for Firestore later; _blockLines removed) ---
+--- JSON PAYLOAD (normalized; debug removed) ---
 [
   {
     "index": 1,
     "startPageNumber": 20,
     "lender": "Fairwinds Credit Uni",
-    "lastUpdated": "12/31/2025",
+    "lastUpdated": {
+      "seconds": 1767157200,
+      "nanoseconds": 0
+    },
+    "openDate": {
+      "seconds": 1751342400,
+      "nanoseconds": 0
+    },
+    "closedDate": null,
+    "lastActivity": {
+      "seconds": 1764565200,
+      "nanoseconds": 0
+    },
     "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
-    "balance": "$6,948",
-    "creditLimit": null,
-    "openDate": "07/2025",
-    "closedDate": null,
-    "lastActivity": "12/2025",
     "loanType": "Vehicle Loan",
     "responsibility": "Individual",
     "companyName": "Fairwinds Credit Uni",
     "accountNumber": "XXXXXXXX",
-    "highBalance": "$7,476",
-    "scheduledPayment": "$145",
     "terms": "60 Months",
+    "balance": 6948,
+    "creditLimit": null,
+    "highBalance": 7476,
+    "scheduledPayment": 145,
     "paymentHistory": [
       {
         "bureau": "Equifax",
@@ -465,21 +267,30 @@ Sanity check lenders + paymentHistory months:
     "index": 2,
     "startPageNumber": 22,
     "lender": "American Express",
-    "lastUpdated": "01/07/2026",
+    "lastUpdated": {
+      "seconds": 1767762000,
+      "nanoseconds": 0
+    },
+    "openDate": {
+      "seconds": 1751342400,
+      "nanoseconds": 0
+    },
+    "closedDate": null,
+    "lastActivity": {
+      "seconds": 1767243600,
+      "nanoseconds": 0
+    },
     "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
-    "balance": "$422",
-    "creditLimit": "$30,000",
-    "openDate": "07/2025",
-    "closedDate": null,
-    "lastActivity": "01/2026",
     "loanType": "Credit Card",
     "responsibility": "Individual",
     "companyName": "American Express",
     "accountNumber": "XXXXXXXXXXXXX2083",
-    "highBalance": "$5,010",
-    "scheduledPayment": "$40",
     "terms": null,
+    "balance": 422,
+    "creditLimit": 30000,
+    "highBalance": 5010,
+    "scheduledPayment": 40,
     "paymentHistory": [
       {
         "bureau": "Equifax",
@@ -632,21 +443,30 @@ Sanity check lenders + paymentHistory months:
     "index": 3,
     "startPageNumber": 24,
     "lender": "Capital One Bank Usa",
-    "lastUpdated": "01/02/2026",
+    "lastUpdated": {
+      "seconds": 1767330000,
+      "nanoseconds": 0
+    },
+    "openDate": {
+      "seconds": 1714536000,
+      "nanoseconds": 0
+    },
+    "closedDate": null,
+    "lastActivity": {
+      "seconds": 1767243600,
+      "nanoseconds": 0
+    },
     "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
-    "balance": "$1,086",
-    "creditLimit": "$11,000",
-    "openDate": "05/2024",
-    "closedDate": null,
-    "lastActivity": "01/2026",
     "loanType": "Credit Card",
     "responsibility": "Individual",
     "companyName": "Capital One Bank Usa",
     "accountNumber": "XXXXXXXXXXXX",
-    "highBalance": "$2,401",
-    "scheduledPayment": "$25",
     "terms": null,
+    "balance": 1086,
+    "creditLimit": 11000,
+    "highBalance": 2401,
+    "scheduledPayment": 25,
     "paymentHistory": [
       {
         "bureau": "Equifax",
@@ -799,21 +619,30 @@ Sanity check lenders + paymentHistory months:
     "index": 4,
     "startPageNumber": 26,
     "lender": "Discover Card",
-    "lastUpdated": "06/06/2025",
+    "lastUpdated": {
+      "seconds": 1749182400,
+      "nanoseconds": 0
+    },
+    "openDate": {
+      "seconds": 1685592000,
+      "nanoseconds": 0
+    },
+    "closedDate": {
+      "seconds": 1746072000,
+      "nanoseconds": 0
+    },
+    "lastActivity": null,
     "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
-    "balance": "$0",
-    "creditLimit": "$1,500",
-    "openDate": "06/2023",
-    "closedDate": "05/01/2025",
-    "lastActivity": null,
     "loanType": "Credit Card",
     "responsibility": "Individual",
     "companyName": "Discover Card",
     "accountNumber": "XXXXXXXXXXXX",
-    "highBalance": "$0",
-    "scheduledPayment": null,
     "terms": null,
+    "balance": 0,
+    "creditLimit": 1500,
+    "highBalance": 0,
+    "scheduledPayment": null,
     "paymentHistory": [
       {
         "bureau": "Equifax",
@@ -1038,21 +867,30 @@ Sanity check lenders + paymentHistory months:
     "index": 5,
     "startPageNumber": 28,
     "lender": "Capital One Bank Usa",
-    "lastUpdated": "12/23/2025",
+    "lastUpdated": {
+      "seconds": 1766466000,
+      "nanoseconds": 0
+    },
+    "openDate": {
+      "seconds": 1677646800,
+      "nanoseconds": 0
+    },
+    "closedDate": null,
+    "lastActivity": {
+      "seconds": 1743480000,
+      "nanoseconds": 0
+    },
     "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
-    "balance": "$0",
-    "creditLimit": "$1,000",
-    "openDate": "03/2023",
-    "closedDate": null,
-    "lastActivity": "04/2025",
     "loanType": "Credit Card",
     "responsibility": "Individual",
     "companyName": "Capital One Bank Usa",
     "accountNumber": "XXXXXXXXXXXX",
-    "highBalance": "$7",
-    "scheduledPayment": null,
     "terms": null,
+    "balance": 0,
+    "creditLimit": 1000,
+    "highBalance": 7,
+    "scheduledPayment": null,
     "paymentHistory": [
       {
         "bureau": "Equifax",
@@ -1277,21 +1115,30 @@ Sanity check lenders + paymentHistory months:
     "index": 6,
     "startPageNumber": 30,
     "lender": "Apple Card - Gs Bank",
-    "lastUpdated": "12/31/2025",
+    "lastUpdated": {
+      "seconds": 1767157200,
+      "nanoseconds": 0
+    },
+    "openDate": {
+      "seconds": 1677646800,
+      "nanoseconds": 0
+    },
+    "closedDate": null,
+    "lastActivity": {
+      "seconds": 1764565200,
+      "nanoseconds": 0
+    },
     "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
-    "balance": "$85",
-    "creditLimit": "$9,000",
-    "openDate": "03/2023",
-    "closedDate": null,
-    "lastActivity": "12/2025",
     "loanType": "Credit Card",
     "responsibility": "Individual",
     "companyName": "Apple Card - Gs Bank",
     "accountNumber": "XXXXXXXXXXXX7489",
-    "highBalance": "$1,550",
-    "scheduledPayment": "$25",
     "terms": null,
+    "balance": 85,
+    "creditLimit": 9000,
+    "highBalance": 1550,
+    "scheduledPayment": 25,
     "paymentHistory": [
       {
         "bureau": "Equifax",
@@ -1516,21 +1363,30 @@ Sanity check lenders + paymentHistory months:
     "index": 7,
     "startPageNumber": 32,
     "lender": "Truist Bank",
-    "lastUpdated": "01/05/2026",
+    "lastUpdated": {
+      "seconds": 1767589200,
+      "nanoseconds": 0
+    },
+    "openDate": {
+      "seconds": 1438401600,
+      "nanoseconds": 0
+    },
+    "closedDate": null,
+    "lastActivity": {
+      "seconds": 1748750400,
+      "nanoseconds": 0
+    },
     "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
-    "balance": "$0",
-    "creditLimit": "$5,700",
-    "openDate": "08/2015",
-    "closedDate": null,
-    "lastActivity": "06/2025",
     "loanType": "Credit Card",
     "responsibility": "Individual",
     "companyName": "Truist Bank",
     "accountNumber": "XXXXXXXXXXXX1522",
-    "highBalance": "$443",
-    "scheduledPayment": null,
     "terms": null,
+    "balance": 0,
+    "creditLimit": 5700,
+    "highBalance": 443,
+    "scheduledPayment": null,
     "paymentHistory": [
       {
         "bureau": "Equifax",
@@ -1683,21 +1539,33 @@ Sanity check lenders + paymentHistory months:
     "index": 8,
     "startPageNumber": 34,
     "lender": "Nelnet Loan Servicin",
-    "lastUpdated": "10/31/2020",
+    "lastUpdated": {
+      "seconds": 1604116800,
+      "nanoseconds": 0
+    },
+    "openDate": {
+      "seconds": 1375329600,
+      "nanoseconds": 0
+    },
+    "closedDate": {
+      "seconds": 1601524800,
+      "nanoseconds": 0
+    },
+    "lastActivity": {
+      "seconds": 1601524800,
+      "nanoseconds": 0
+    },
     "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
-    "balance": "$0",
-    "creditLimit": null,
-    "openDate": "08/2013",
-    "closedDate": "10/01/2020",
-    "lastActivity": "10/2020",
     "loanType": "Student Loan",
     "responsibility": "Individual",
     "companyName": "Nelnet Loan Servicin",
     "accountNumber": "XXXXXX8581",
-    "highBalance": "$28,689",
-    "scheduledPayment": null,
     "terms": null,
+    "balance": 0,
+    "creditLimit": null,
+    "highBalance": 28689,
+    "scheduledPayment": null,
     "paymentHistory": [
       {
         "bureau": "Equifax",
