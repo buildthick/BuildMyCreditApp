@@ -1,18 +1,27 @@
 /**
- * parse_local.cjs (DROP-IN REPLACEMENT v2)
+ * parse_local.cjs (CLEAN - CANONICAL PAYMENT HISTORY)
  *
- * - pdfjs-dist coordinate extraction -> stable logical lines
- * - robust account block segmentation anchored on "Last Updated"
- * - normalized field extraction for labels with variable dash artifacts
- * - paymentHistory:
- *    (A) rows: [{bureau, year, months:{Jan:"OK"...}}]
- *    (B) monthsFlat: [{bureau, year, month:"Jan", code:"OK"}...]
+ * Local parser for myFICO 1-Bureau (Equifax) "Condensed" PDF
+ *
+ * - Uses pdfjs-dist (coordinate-aware) to reconstruct stable logical lines
+ * - Splits Accounts section into account blocks anchored on "Last Updated"
+ * - Extracts core and detail fields
+ * - Payment history: stores ONE canonical field:
+ *     paymentHistory: [{ bureau, year, month, code }, ...]
+ *
+ * Run:
+ *   node parse_local.cjs
+ *   node parse_local.cjs "/full/path/to/your.pdf"
  */
 
 const fs = require("fs");
 const path = require("path");
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+/* =========================
+   String cleanup helpers
+========================= */
 
 function norm(s) {
   return String(s || "").replace(/\s+/g, " ").trim();
@@ -25,11 +34,15 @@ function cleanDashes(s) {
 
 function cleanValue(s) {
   s = cleanDashes(s);
-  // Normalize common “empty” patterns
   if (!s) return null;
+
+  // Normalize common “empty” patterns
   if (/^–+$/.test(s)) return null;
   if (/^-\s*-\s*$/.test(s)) return null;
   if (/^(none|n\/a)$/i.test(s)) return null;
+  if (s === "–") return null;
+  if (s === "-") return null;
+
   return s;
 }
 
@@ -37,7 +50,7 @@ function isJunkLine(s) {
   s = cleanDashes(s);
   if (!s) return true;
 
-  // timestamps like 1/15/26, ...
+  // timestamps like "1/15/26, 1:25 PM ..."
   if (/^\d{1,2}\/\d{1,2}\/\d{2},\s*\d{1,2}:\d{2}\s*(AM|PM)\b/i.test(s)) return true;
 
   if (s.includes("myFICO")) return true;
@@ -52,23 +65,24 @@ function isJunkLine(s) {
   return false;
 }
 
-// Find lender above the first "Last Updated..." line in a slice
+/* =========================
+   Lender extraction
+========================= */
+
 function findLenderAbove(lines, idx) {
   for (let j = idx - 1; j >= 0; j--) {
     const s = cleanDashes(lines[j]);
     if (isJunkLine(s)) continue;
-    if (s === "CLOSED") continue; // special edge case
+    if (s === "CLOSED") continue; // closed accounts sometimes show this line
     return s;
   }
   return null;
 }
 
-// Fallback: scan within block for first "Last Updated" and take closest non-junk above it
 function guessLenderFromBlock(blockLines) {
   for (let i = 0; i < blockLines.length; i++) {
     const ln = cleanDashes(blockLines[i]);
     if (/^Last Updated\b/i.test(ln)) {
-      // search above within the block
       for (let j = i - 1; j >= 0; j--) {
         const s = cleanDashes(blockLines[j]);
         if (isJunkLine(s)) continue;
@@ -81,10 +95,11 @@ function guessLenderFromBlock(blockLines) {
 }
 
 /* =========================
-   PDF.js extraction
+   PDF.js extraction (stable lines)
 ========================= */
 
 async function extractPdfPagesFromUint8(uint8) {
+  // Dynamic import so we can keep this file as .cjs
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const { getDocument } = pdfjs;
 
@@ -134,7 +149,7 @@ async function extractPdfPagesFromUint8(uint8) {
 }
 
 /* =========================
-   Blocks
+   Block segmentation (Accounts section)
 ========================= */
 
 function buildAccountBlocks(lines, linePages, accountsIdx, collectionsIdx) {
@@ -155,7 +170,7 @@ function buildAccountBlocks(lines, linePages, accountsIdx, collectionsIdx) {
 
       cur = { startPageNumber, lender, lines: [] };
 
-      // Preserve the lender line at top for debugging clarity (optional)
+      // keep lender line for debugging clarity (optional)
       if (lender) cur.lines.push(lender);
     }
 
@@ -168,7 +183,6 @@ function buildAccountBlocks(lines, linePages, accountsIdx, collectionsIdx) {
 
 /* =========================
    Field extraction
-   - Handles both "LabelValue" (old) and "Label Value" (PDF.js lines)
 ========================= */
 
 function extractLabelValue(lines, label) {
@@ -192,13 +206,11 @@ function extractLabelValue(lines, label) {
   return null;
 }
 
-// “multi-line” label blocks sometimes exist (rare). Keep for future if needed.
 function extractFollowingLineAfterLabel(lines, label) {
   const labelNorm = cleanDashes(label).toLowerCase();
   for (let i = 0; i < lines.length - 1; i++) {
     if (cleanDashes(lines[i]).toLowerCase() === labelNorm) {
-      const v = cleanValue(lines[i + 1]);
-      return v;
+      return cleanValue(lines[i + 1]);
     }
   }
   return null;
@@ -206,6 +218,7 @@ function extractFollowingLineAfterLabel(lines, label) {
 
 /* =========================
    Payment history
+   Canonical output: paymentHistory (flat monthly list)
 ========================= */
 
 function parsePaymentHistoryRows(blockLines) {
@@ -223,6 +236,9 @@ function parsePaymentHistoryRows(blockLines) {
 
   const slice = blockLines.slice(startIdx + 1, endIdx).map(cleanDashes).filter(Boolean);
 
+  // pattern:
+  // 2025 Jan Feb ... Dec
+  // Equifax OK OK ... OK
   for (let i = 0; i < slice.length - 1; i++) {
     const yearRow = slice[i];
     const bureauRow = slice[i + 1];
@@ -252,8 +268,12 @@ function flattenPaymentHistory(rows) {
   const flat = [];
   for (const r of rows) {
     for (const m of MONTHS) {
-      const code = r.months?.[m] ?? null;
-      flat.push({ bureau: r.bureau, year: r.year, month: m, code });
+      flat.push({
+        bureau: r.bureau,
+        year: r.year,
+        month: m,
+        code: r.months?.[m] ?? null,
+      });
     }
   }
   return flat;
@@ -277,6 +297,7 @@ const pdfPath = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_PDF_PA
 
   const pages = await extractPdfPagesFromUint8(uint8);
 
+  // Flatten lines + map each line to its page number
   const lines = [];
   const linePages = [];
   for (const p of pages) {
@@ -302,11 +323,12 @@ const pdfPath = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_PDF_PA
 
   const accounts = blocks.map((b, idx) => {
     const blockLines = b.lines.map(cleanDashes);
-
     const lender = b.lender || guessLenderFromBlock(blockLines);
 
     // Core
     const lastUpdated = extractLabelValue(blockLines, "Last Updated");
+
+    // Payment Status is header-only in this PDF: "Payment Status" then next line value
     let paymentStatus = extractLabelValue(blockLines, "Payment Status");
     if (!paymentStatus) paymentStatus = extractFollowingLineAfterLabel(blockLines, "Payment Status");
     paymentStatus = cleanValue(paymentStatus);
@@ -320,28 +342,34 @@ const pdfPath = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_PDF_PA
     const closedDate = extractLabelValue(blockLines, "Closed Date");
     const lastActivity = extractLabelValue(blockLines, "Last Activity");
 
-    // Additional “details” fields seen in your debug
+    // Details
     const loanType = extractLabelValue(blockLines, "Loan Type");
     const responsibility = extractLabelValue(blockLines, "Responsibility");
     const companyName = extractLabelValue(blockLines, "Company Name");
     const accountNumber = extractLabelValue(blockLines, "Account Number");
-
     const highBalance = extractLabelValue(blockLines, "High Balance");
-    const scheduledPayment = extractLabelValue(blockLines, "Scheduled Payment");
-    const terms = extractLabelValue(blockLines, "Terms");
 
-    // Payment history
-    const paymentHistoryRows = parsePaymentHistoryRows(blockLines);
-    const paymentHistoryMonths = flattenPaymentHistory(paymentHistoryRows);
+    // These are often "–" in your report, but keep them anyway
+    let scheduledPayment = extractLabelValue(blockLines, "Scheduled Payment");
+    if (!scheduledPayment) scheduledPayment = extractFollowingLineAfterLabel(blockLines, "Scheduled Payment");
+    scheduledPayment = cleanValue(scheduledPayment);
 
-    // Warnings (cheap health checks)
+    let terms = extractLabelValue(blockLines, "Terms");
+    if (!terms) terms = extractFollowingLineAfterLabel(blockLines, "Terms");
+    terms = cleanValue(terms);
+
+    // Payment history (canonical flat months list)
+    const paymentHistoryRows = parsePaymentHistoryRows(blockLines); // internal only
+    const paymentHistory = flattenPaymentHistory(paymentHistoryRows); // output
+
+    // Warnings
     const warnings = [];
     if (!lender) warnings.push("missing_lender");
     if (!lastUpdated) warnings.push("missing_lastUpdated");
     if (!paymentStatus) warnings.push("missing_paymentStatus");
     if (!worstDelinquency) warnings.push("missing_worstDelinquency");
     if (!loanType) warnings.push("missing_loanType");
-    if (paymentHistoryRows.length === 0) warnings.push("missing_paymentHistory");
+    if (!paymentHistory.length) warnings.push("missing_paymentHistory");
 
     return {
       index: idx + 1,
@@ -349,7 +377,6 @@ const pdfPath = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_PDF_PA
 
       lender,
 
-      // Core summary fields
       lastUpdated,
       paymentStatus,
       worstDelinquency,
@@ -361,7 +388,6 @@ const pdfPath = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_PDF_PA
       closedDate,
       lastActivity,
 
-      // Details
       loanType,
       responsibility,
       companyName,
@@ -370,18 +396,17 @@ const pdfPath = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_PDF_PA
       scheduledPayment,
       terms,
 
-      // Payment history outputs
-      paymentHistoryRows,    // grouped by year
-      paymentHistoryMonths,  // flattened monthly level
+      // CANONICAL
+      paymentHistory,
 
       warnings,
 
-      // keep for debugging locally; remove before CF write
+      // debug only; remove before CF write
       _blockLines: blockLines,
     };
   });
 
-  // Debug blocks you were checking
+  // Debug blocks
   console.log("\n--- DEBUG TRUIST BLOCK (first 160 lines) ---");
   const tr = accounts.find((a) => (a.lender || "").toLowerCase().includes("truist"));
   if (tr) console.log(tr._blockLines.slice(0, 160).join("\n"));
@@ -407,21 +432,18 @@ const pdfPath = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_PDF_PA
     console.log("Account Number:", a.accountNumber);
     console.log("High Balance:", a.highBalance);
     console.log("Scheduled Payment:", a.scheduledPayment);
-    console.log("paymentHistoryRows:", a.paymentHistoryRows.length, " | monthsFlat:", a.paymentHistoryMonths.length);
+    console.log("Terms:", a.terms);
+    console.log("paymentHistory months:", a.paymentHistory?.length ?? 0);
     if (a.warnings.length) console.log("WARN:", a.warnings.join(", "));
   }
 
-  console.log("\nSanity check lenders + rows:");
-  accounts.forEach((a) =>
-    console.log(`${a.index} ${a.lender} rows:${a.paymentHistoryRows.length} months:${a.paymentHistoryMonths.length}`)
-  );
+  console.log("\nSanity check lenders + paymentHistory months:");
+  accounts.forEach((a) => console.log(`${a.index} ${a.lender} months:${a.paymentHistory?.length ?? 0}`));
 
-  // Optional: dump the clean payload as JSON (for Firestore write later)
-  // Comment out if too verbose.
-  console.log("\n--- JSON PAYLOAD (trim _blockLines before CF write) ---");
+  // JSON payload (strip _blockLines for clean output)
+  console.log("\n--- JSON PAYLOAD (ready for Firestore later; _blockLines removed) ---");
   const payload = accounts.map(({ _blockLines, ...rest }) => rest);
   console.log(JSON.stringify(payload, null, 2));
-
 })().catch((err) => {
   console.error("\nFatal error:", err);
   process.exit(99);
