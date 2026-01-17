@@ -1,5 +1,4 @@
 noahgomez@Mac bmca-backend-parsing-Node % node parse_local.cjs
-
 accounts_idx: 134 page: 19
 collections_idx: 411 page: 35
 blocks: 8
@@ -77,7 +76,7 @@ Comments
 ==========================================================================================
 1. Fairwinds Credit Uni (page 20)
 Last Updated: 12/31/2025
-Payment Status: null
+Payment Status: Pays account as agreed
 Worst Delinquency: None Reported
 Loan Type: Vehicle Loan
 Balance: $6,948
@@ -90,11 +89,10 @@ Account Number: XXXXXXXX
 High Balance: $7,476
 Scheduled Payment: $145
 paymentHistoryRows: 3  | monthsFlat: 36
-WARN: missing_paymentStatus
 ==========================================================================================
 2. American Express (page 22)
 Last Updated: 01/07/2026
-Payment Status: null
+Payment Status: Pays account as agreed
 Worst Delinquency: None Reported
 Loan Type: Credit Card
 Balance: $422
@@ -107,11 +105,10 @@ Account Number: XXXXXXXXXXXXX2083
 High Balance: $5,010
 Scheduled Payment: $40
 paymentHistoryRows: 2  | monthsFlat: 24
-WARN: missing_paymentStatus
 ==========================================================================================
 3. Capital One Bank Usa (page 24)
 Last Updated: 01/02/2026
-Payment Status: null
+Payment Status: Pays account as agreed
 Worst Delinquency: None Reported
 Loan Type: Credit Card
 Balance: $1,086
@@ -124,11 +121,10 @@ Account Number: XXXXXXXXXXXX
 High Balance: $2,401
 Scheduled Payment: $25
 paymentHistoryRows: 2  | monthsFlat: 24
-WARN: missing_paymentStatus
 ==========================================================================================
 4. Discover Card (page 26)
 Last Updated: 06/06/2025
-Payment Status: null
+Payment Status: Pays account as agreed
 Worst Delinquency: None Reported
 Loan Type: Credit Card
 Balance: $0
@@ -141,11 +137,10 @@ Account Number: XXXXXXXXXXXX
 High Balance: $0
 Scheduled Payment: null
 paymentHistoryRows: 3  | monthsFlat: 36
-WARN: missing_paymentStatus
 ==========================================================================================
 5. Capital One Bank Usa (page 28)
 Last Updated: 12/23/2025
-Payment Status: null
+Payment Status: Pays account as agreed
 Worst Delinquency: None Reported
 Loan Type: Credit Card
 Balance: $0
@@ -158,11 +153,10 @@ Account Number: XXXXXXXXXXXX
 High Balance: $7
 Scheduled Payment: null
 paymentHistoryRows: 3  | monthsFlat: 36
-WARN: missing_paymentStatus
 ==========================================================================================
 6. Apple Card - Gs Bank (page 30)
 Last Updated: 12/31/2025
-Payment Status: null
+Payment Status: Pays account as agreed
 Worst Delinquency: None Reported
 Loan Type: Credit Card
 Balance: $85
@@ -175,11 +169,10 @@ Account Number: XXXXXXXXXXXX7489
 High Balance: $1,550
 Scheduled Payment: $25
 paymentHistoryRows: 3  | monthsFlat: 36
-WARN: missing_paymentStatus
 ==========================================================================================
 7. Truist Bank (page 32)
 Last Updated: 01/05/2026
-Payment Status: null
+Payment Status: Pays account as agreed
 Worst Delinquency: None Reported
 Loan Type: Credit Card
 Balance: $0
@@ -192,11 +185,10 @@ Account Number: XXXXXXXXXXXX1522
 High Balance: $443
 Scheduled Payment: null
 paymentHistoryRows: 2  | monthsFlat: 24
-WARN: missing_paymentStatus
 ==========================================================================================
 8. Nelnet Loan Servicin (page 34)
 Last Updated: 10/31/2020
-Payment Status: null
+Payment Status: Pays account as agreed
 Worst Delinquency: None Reported
 Loan Type: Student Loan
 Balance: $0
@@ -209,7 +201,6 @@ Account Number: XXXXXX8581
 High Balance: $28,689
 Scheduled Payment: null
 paymentHistoryRows: 3  | monthsFlat: 36
-WARN: missing_paymentStatus
 
 Sanity check lenders + rows:
 1 Fairwinds Credit Uni rows:3 months:36
@@ -228,7 +219,7 @@ Sanity check lenders + rows:
     "startPageNumber": 20,
     "lender": "Fairwinds Credit Uni",
     "lastUpdated": "12/31/2025",
-    "paymentStatus": null,
+    "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
     "balance": "$6,948",
     "creditLimit": null,
@@ -516,16 +507,14 @@ Sanity check lenders + rows:
         "code": "NO"
       }
     ],
-    "warnings": [
-      "missing_paymentStatus"
-    ]
+    "warnings": []
   },
   {
     "index": 2,
     "startPageNumber": 22,
     "lender": "American Express",
     "lastUpdated": "01/07/2026",
-    "paymentStatus": null,
+    "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
     "balance": "$422",
     "creditLimit": "$30,000",
@@ -723,16 +712,14 @@ Sanity check lenders + rows:
         "code": "NO"
       }
     ],
-    "warnings": [
-      "missing_paymentStatus"
-    ]
+    "warnings": []
   },
   {
     "index": 3,
     "startPageNumber": 24,
     "lender": "Capital One Bank Usa",
     "lastUpdated": "01/02/2026",
-    "paymentStatus": null,
+    "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
     "balance": "$1,086",
     "creditLimit": "$11,000",
@@ -930,16 +917,14 @@ Sanity check lenders + rows:
         "code": "OK"
       }
     ],
-    "warnings": [
-      "missing_paymentStatus"
-    ]
+    "warnings": []
   },
   {
     "index": 4,
     "startPageNumber": 26,
     "lender": "Discover Card",
     "lastUpdated": "06/06/2025",
-    "paymentStatus": null,
+    "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
     "balance": "$0",
     "creditLimit": "$1,500",
@@ -1227,16 +1212,14 @@ Sanity check lenders + rows:
         "code": "OK"
       }
     ],
-    "warnings": [
-      "missing_paymentStatus"
-    ]
+    "warnings": []
   },
   {
     "index": 5,
     "startPageNumber": 28,
     "lender": "Capital One Bank Usa",
     "lastUpdated": "12/23/2025",
-    "paymentStatus": null,
+    "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
     "balance": "$0",
     "creditLimit": "$1,000",
@@ -1524,16 +1507,14 @@ Sanity check lenders + rows:
         "code": "OK"
       }
     ],
-    "warnings": [
-      "missing_paymentStatus"
-    ]
+    "warnings": []
   },
   {
     "index": 6,
     "startPageNumber": 30,
     "lender": "Apple Card - Gs Bank",
     "lastUpdated": "12/31/2025",
-    "paymentStatus": null,
+    "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
     "balance": "$85",
     "creditLimit": "$9,000",
@@ -1821,16 +1802,14 @@ Sanity check lenders + rows:
         "code": "OK"
       }
     ],
-    "warnings": [
-      "missing_paymentStatus"
-    ]
+    "warnings": []
   },
   {
     "index": 7,
     "startPageNumber": 32,
     "lender": "Truist Bank",
     "lastUpdated": "01/05/2026",
-    "paymentStatus": null,
+    "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
     "balance": "$0",
     "creditLimit": "$5,700",
@@ -2028,16 +2007,14 @@ Sanity check lenders + rows:
         "code": "OK"
       }
     ],
-    "warnings": [
-      "missing_paymentStatus"
-    ]
+    "warnings": []
   },
   {
     "index": 8,
     "startPageNumber": 34,
     "lender": "Nelnet Loan Servicin",
     "lastUpdated": "10/31/2020",
-    "paymentStatus": null,
+    "paymentStatus": "Pays account as agreed",
     "worstDelinquency": "None Reported",
     "balance": "$0",
     "creditLimit": null,
@@ -2325,9 +2302,6 @@ Sanity check lenders + rows:
         "code": "NR"
       }
     ],
-    "warnings": [
-      "missing_paymentStatus"
-    ]
+    "warnings": []
   }
 ]
-noahgomez@Mac bmca-backend-parsing-Node %    
