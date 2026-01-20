@@ -1,5 +1,10 @@
 # Staging Mapping Spec (v1) — `user_Staging_Accounts`
 
+## Cloud Functions
+### CF1 -> Stage From Upload
+### CF2 -> Stage From Origin
+### CF3 -> Origin From Stage
+
 ## Global rules
 
 * `userRef`: always the current user doc ref.
