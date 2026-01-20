@@ -211,116 +211,154 @@ Same as collections: no stable schema from parser yet → user will enter direct
 
 Absolutely — here’s the **drop-in section** you can append to your existing `mappings.md` (same style, same conventions), reflecting the final agreed **Upload → Staging late extraction** rules, including your updated severity logic + the new `lateDisambiguousParentAccountString`. 
 
-## CF1.E — snapshot `recordType:"account"` → staging (lates derived from paymentHistory)
+Absolutely — here is the **clean, final, authoritative rewrite** of **CF1.E** that you can **paste directly into `mappings.md`**. This version reflects the *actual observed report codes* and removes all earlier speculation.
 
-**Goal:** Each account snapshot can produce **0..N late docs**.
-A “late doc” is created **once per contiguous sequence** of negative codes.
-**3 consecutive months of late marking = 1 late doc.**
+## CF1.E — snapshot `recordType:"account"` → staging
 
-### Legend codes (classification)
+### (lates derived from `paymentHistory`)
+
+**Goal:**
+Each account snapshot can produce **0..N late staging docs**.
+A **late staging doc represents one contiguous late event**, regardless of how many months it spans.
+
+> **Important invariant:**
+> **Consecutive late months = 1 late**
+> Separate late sequences = separate late docs
+
+---
+
+### Payment history codes (authoritative)
+
+Observed in real reports:
 
 **Good**
 
 * `OK`
 
-**Neutral (does not start a late by itself)**
+**Neutral**
 
 * `NR` (Not Reported)
-* `UN` (Unknown)
-* `D` (Dispute)
 
-**Not-open / boundary**
+**Negative (late / derogatory)**
 
-* `NO` (Not Open) → treat as neutral, but it also **ends** an active late sequence if encountered.
+* `30`
+* `60`
+* `90`
+* `120`
+* `150`
+* `180`
+* `CO` (Charge-Off)
 
-**Negative (starts/continues a late sequence)**
+There is **no generic `#` code** in practice.
 
-* `CO` (ChargeOff/Other Derogatory)
-* `FC` (Foreclosure)
-* `PP` (Payment Plan)
-* `# Days Late`:
+---
 
-  * either explicit numeric days (e.g. `30`, `60`, `90`…) **OR**
-  * may appear as just `#` (unknown days)
+### Late event segmentation
 
-### Event segmentation rule
+Scan the account’s `paymentHistory` **chronologically** (oldest → newest):
 
-Scan the monthly payment history in chronological order:
+1. **Start a late event** when a month contains any **Negative** code.
+2. **Continue the same event** while subsequent months remain Negative.
+3. **End the event** when a month becomes:
 
-* Start an event when entering a **Negative** month from a non-negative month.
-* Continue while months remain **Negative**.
-* End event when the first non-negative code appears (`OK`, `NR`, `UN`, `D`, `NO`, or end-of-history).
-* Write **1 staging late doc per event**.
+   * `OK`, or
+   * `NR`, or
+   * end of history.
+4. **Write exactly one staging late doc per event.**
+
+Example:
+
+```
+OK → OK → 30 → 60 → OK → OK
+```
+
+→ **1 late doc** (severity `60`)
+
+---
+
+### severity
+
+For each late event:
+
+* If numeric codes appear (`30–180`):
+  → `severity = max(numericCodeInEvent)` (as string)
+
+* Else if `CO` appears:
+  → `severity = "CO"`
+
+---
 
 ### isPaid
 
 For each late event:
 
-* `isPaid = true` **only if** the first month after the sequence ends is `OK`
-* otherwise `isPaid = false`
+* `isPaid = true` **only if** the **first month after the event** is `OK`
+* Otherwise `isPaid = false`
 
-*(Leave `isCurrent = null` for all late docs.)*
+> `isCurrent` is **not used** for late docs.
 
-### severity (final agreed logic)
+---
 
-For each late event:
+### DOFRecord
 
-1. If the event contains any explicit numeric days-late values (e.g. `30`, `60`, `90`):
+* `DOFRecord` = **first month of the late event**
+  (the month where the first negative code appears)
 
-   * `severity = max(numericDaysLateInEvent)` as a string
+---
 
-2. Else if the event uses only the generic `#` marker (no numeric days):
+### lateDisambiguousParentAccountString
 
-   * `severity = 30 * (count of consecutive "#" months in that event)` as a string
-     (e.g. `###` → `"90"`)
+For every **late staging doc only**, set:
 
-3. Else (no numeric days and no `#`), use other negative event types:
-
-   * if event contains `CO` → `"CO"`
-   * else if contains `FC` → `"FC"`
-   * else if contains `PP` → `"PP"`
-   * else `"unknown"`
-
-### lateDisambiguousParentAccountString (NEW FIELD)
-
-For every **late doc only**:
-
-* `lateDisambiguousParentAccountString = lender + "|" + accountNumber + "|" + openDate + "|" + loanType`
+```
+lateDisambiguousParentAccountString =
+  lender + "|" + accountNumber + "|" + openDate + "|" + loanType
+```
 
 Where:
 
-* `lender` = from snapshot account
-* `accountNumber` = from snapshot if available; else `""`
+* `lender` = snapshot account lender
+* `accountNumber` = snapshot account number if available, else `""`
 * `openDate` = snapshot openDate (stringified consistently)
 * `loanType` = snapshot loanType
 
-For all non-late staging docs: `lateDisambiguousParentAccountString = null`.
+For all **non-late staging docs**:
+`lateDisambiguousParentAccountString = null`
 
-### Late doc mapping (Upload → Staging)
+---
 
-| staging field                       | value                                                                                                            |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| stock                               | based on parent loanType: credit card → `"user_credit_cards_late_payments"`, else → `"user_loans_late_payments"` |
-| subStock                            | credit card → `"Revolving"`, else → `"Installment"`                                                              |
-| lender                              | parent snapshot lender                                                                                           |
-| name                                | parent snapshot companyName                                                                                      |
-| DOFRecord                           | **start month** of the late event (first negative month)                                                         |
-| severity                            | per rules above                                                                                                  |
-| isPaid                              | per rules above                                                                                                  |
-| isCurrent                           | `null`                                                                                                           |
-| amountsOwed                         | `0` *(user inputs in UI)*                                                                                        |
-| creditLimit                         | `null`                                                                                                           |
-| isOpen                              | `null`                                                                                                           |
-| apr                                 | `0`                                                                                                              |
-| interestRate                        | `null`                                                                                                           |
-| isCFA                               | `false`                                                                                                          |
-| isAnnualFee                         | `false`                                                                                                          |
-| originDocRef                        | `""`                                                                                                             |
-| lateOriginRef                       | `"Irrelevant"`                                                                                                   |
-| collections_agency                  | `""`                                                                                                             |
-| lateDisambiguousParentAccountString | as defined above                                                                                                 |
-| stagingSource                       | `"report_upload"`                                                                                                |
-| uploadID                            | `uploadId`                                                                                                       |
-| parserVersion                       | from reportUploads doc or constant                                                                               |
+### Late staging doc mapping (Upload → Staging)
 
+| staging field                       | value                                                                                    |
+| ----------------------------------- | ---------------------------------------------------------------------------------------- |
+| stock                               | credit card → `"user_credit_cards_late_payments"`<br>loan → `"user_loans_late_payments"` |
+| subStock                            | credit card → `"Revolving"`<br>loan → `"Installment"`                                    |
+| lender                              | parent snapshot lender                                                                   |
+| name                                | parent snapshot companyName                                                              |
+| DOFRecord                           | start month of the late event                                                            |
+| severity                            | per rules above                                                                          |
+| isPaid                              | per rules above                                                                          |
+| isCurrent                           | `null`                                                                                   |
+| amountsOwed                         | `0` *(user inputs via UI)*                                                               |
+| creditLimit                         | `null`                                                                                   |
+| isOpen                              | `null`                                                                                   |
+| apr                                 | `0`                                                                                      |
+| interestRate                        | `null`                                                                                   |
+| isCFA                               | `false`                                                                                  |
+| isAnnualFee                         | `false`                                                                                  |
+| originDocRef                        | `""`                                                                                     |
+| lateOriginRef                       | `"Irrelevant"`                                                                           |
+| collections_agency                  | `""`                                                                                     |
+| lateDisambiguousParentAccountString | as defined above                                                                         |
+| stagingSource                       | `"report_upload"`                                                                        |
+| uploadID                            | `uploadId`                                                                               |
+| parserVersion                       | from `reportUploads/{uploadId}` or constant                                              |
 
+---
+
+This section is now **fully aligned with real report data**, internally consistent with the rest of `mappings.md`, and safe to treat as **final for CF1 implementation**.
+
+If you want, next we can:
+
+* sanity-check this against one real parsed `paymentHistory` object shape, or
+* move straight into **CF1 pseudocode / helper function design** in the new thread.
