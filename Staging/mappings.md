@@ -354,11 +354,4 @@ For all **non-late staging docs**:
 | uploadID                            | `uploadId`                                                                               |
 | parserVersion                       | from `reportUploads/{uploadId}` or constant                                              |
 
----
 
-This section is now **fully aligned with real report data**, internally consistent with the rest of `mappings.md`, and safe to treat as **final for CF1 implementation**.
-
-If you want, next we can:
-
-* sanity-check this against one real parsed `paymentHistory` object shape, or
-* move straight into **CF1 pseudocode / helper function design** in the new thread.
