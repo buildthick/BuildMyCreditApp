@@ -1,0 +1,32 @@
+account type	origin collection	staging collection stock match for origin colleciton	origin collection field	staging collection field	IsCandidateMatchField	IsDisambiguationField
+credit cards	user_credit_cards	user_credit_cards	lender	lender	TRUE	FALSE
+credit cards	user_credit_cards	user_credit_cards	dateIssued	DOFRecord	TRUE	FALSE
+credit cards	user_credit_cards	user_credit_cards	accountNumber	accountNumber	TRUE	FALSE
+credit cards	user_credit_cards	user_credit_cards	isCFA	isCFA	TRUE	FALSE
+credit cards	user_credit_cards	user_credit_cards	isOpen	isOpen	FALSE	TRUE
+credit cards	user_credit_cards	user_credit_cards	creditLimit	creditLimit	FALSE	TRUE
+credit cards	user_credit_cards	user_credit_cards	totalBalance	amountsOwed	FALSE	TRUE
+loans	user_loans	user_loans	lender	lender	TRUE	FALSE
+loans	user_loans	user_loans	dateIssued	DOFRecord	TRUE	FALSE
+loans	user_loans	user_loans	accountNumber	accountNumber	TRUE	FALSE
+loans	user_loans	user_loans	isCFA	isCFA	TRUE	FALSE
+loans	user_loans	user_loans	isOpen	isOpen	FALSE	TRUE
+loans	user_loans	user_loans	principalOriginal	creditLimit	FALSE	TRUE
+loans	user_loans	user_loans	balance	amountsOwed	FALSE	TRUE
+card lates	user_credit_cards_late_payments	user_credit_cards_late_payments	cardRef.lender	lender	TRUE	FALSE
+card lates	user_credit_cards_late_payments	user_credit_cards_late_payments	DOFD	DOFRecord	TRUE	FALSE
+card lates	user_credit_cards_late_payments	user_credit_cards_late_payments	isPaid	isPaid	FALSE	TRUE
+card lates	user_credit_cards_late_payments	user_credit_cards_late_payments	fields [lender+accountNumber+openDate+loanType]	lateDisambiguousParentAccountString	FALSE	TRUE
+card lates	user_credit_cards_late_payments	user_credit_cards_late_payments	amount	amountsOwed	FALSE	TRUE
+loan lates	user_loans_late_payments	user_loans_late_payments	loanRef.lender	lender	TRUE	FALSE
+loan lates	user_loans_late_payments	user_loans_late_payments	DOFD	DOFRecord	TRUE	FALSE
+loan lates	user_loans_late_payments	user_loans_late_payments	isPaid	isPaid	FALSE	TRUE
+loan lates	user_loans_late_payments	user_loans_late_payments	fields [lender+accountNumber+openDate+loanType]	lateDisambiguousParentAccountString	FALSE	TRUE
+loan lates	user_loans_late_payments	user_loans_late_payments	amount	amountsOwed	FALSE	TRUE
+3rd party collections	user_collections_3rd_party	user_collections_3rd_party	originalProvider	lender	TRUE	FALSE
+3rd party collections	user_collections_3rd_party	user_collections_3rd_party	collectionsAgency	collections_agency	TRUE	FALSE
+3rd party collections	user_collections_3rd_party	user_collections_3rd_party	DOFD	DOFRecord	TRUE	FALSE
+3rd party collections	user_collections_3rd_party	user_collections_3rd_party	isPaid	isPaid	FALSE	TRUE
+						
+						
+lateDisambiguousParentAccountString = lender+accountNumber+openDate+loanType						
