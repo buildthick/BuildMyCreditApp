@@ -1,0 +1,460 @@
+const functions = require('firebase-functions/v1');
+const admin = require('firebase-admin');
+// To avoid deployment errors, do not call admin.initializeApp() in your code
+
+exports.stageFromUpload = functions.region('us-central1').https.onCall(
+  async (data, context) => {
+    if (!context.auth || !context.auth.uid) return;
+
+    const uid = context.auth.uid;
+    const uploadId = (data && data.uploadId) ? String(data.uploadId).trim() : "";
+    if (!uploadId) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'Missing required field: uploadId'
+      );
+    }
+
+    const db = admin.firestore();
+    const userRef = db.doc(`users/${uid}`);
+    const stagingCol = db.collection('user_Staging_Accounts');
+    const snapsCol = db.collection(`users/${uid}/reportUploads/${uploadId}/stocks_conso_report_uploads`);
+
+    // --- helpers ---
+    const asStr = (v, fallback = "") => (typeof v === "string" ? v : (v == null ? fallback : String(v)));
+    const asNum = (v, fallback = null) => {
+      if (v == null) return fallback;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : fallback;
+    };
+
+    const monthIndex = (m) => {
+      const map = {
+        Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+        Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+      };
+      return (m in map) ? map[m] : null;
+    };
+
+    const tsFromMonthYear = (year, monStr) => {
+      const mi = monthIndex(monStr);
+      if (!Number.isFinite(year) || mi == null) return null;
+      // Use UTC month start; staging just needs consistent month anchor.
+      return admin.firestore.Timestamp.fromDate(new Date(Date.UTC(year, mi, 1, 0, 0, 0)));
+    };
+
+    // Late logic sets
+    const NEG = new Set(["30","60","90","120","150","180","CO"]);
+    const SOFT = new Set(["D","NR"]); // dispute / not reported
+    const HARD = new Set(["OK","NO","UN","PP","FC"]); // ends lates immediately
+
+    const normalizeCode = (c) => asStr(c, "").trim().toUpperCase();
+
+    const sortPaymentHistoryChronological = (ph) => {
+      if (!Array.isArray(ph)) return [];
+      const withKey = ph
+        .map((x) => {
+          const year = asNum(x && x.year, null);
+          const mon = asStr(x && x.month, "");
+          const mi = monthIndex(mon);
+          return { ...x, _y: year, _mi: mi };
+        })
+        .filter((x) => Number.isFinite(x._y) && x._mi != null);
+
+      withKey.sort((a, b) => (a._y - b._y) || (a._mi - b._mi));
+      return withKey;
+    };
+
+    /**
+     * Derive late events using:
+     * - NEG starts/continues
+     * - SOFT (D, NR) is transparent: does not end an event
+     * - HARD ends event; isPaid = true only if HARD == OK
+     */
+    const deriveLateEvents = (paymentHistory) => {
+      const months = sortPaymentHistoryChronological(paymentHistory);
+
+      const events = [];
+      let inEvent = false;
+      let startMonth = null;   // {year, month}
+      let lastNegMonth = null; // {year, month}
+      let maxNum = null;
+      let hasCO = false;
+
+      const flush = (paid) => {
+        if (!inEvent || !startMonth || !lastNegMonth) return;
+        let severity = "";
+        if (hasCO) severity = "CO";
+        if (maxNum != null) severity = String(maxNum);
+        // If both CO and numeric exist, keep CO as "worst"
+        if (hasCO) severity = "CO";
+
+        events.push({
+          startMonth,
+          endMonth: lastNegMonth,
+          severity,
+          isPaid: !!paid,
+        });
+
+        inEvent = false;
+        startMonth = null;
+        lastNegMonth = null;
+        maxNum = null;
+        hasCO = false;
+      };
+
+      for (let i = 0; i < months.length; i++) {
+        const m = months[i];
+        const code = normalizeCode(m.code);
+
+        if (NEG.has(code)) {
+          if (!inEvent) {
+            inEvent = true;
+            startMonth = { year: m._y, month: m.month };
+          }
+          lastNegMonth = { year: m._y, month: m.month };
+
+          if (code === "CO") {
+            hasCO = true;
+          } else {
+            const n = Number(code);
+            if (Number.isFinite(n)) {
+              if (maxNum == null || n > maxNum) maxNum = n;
+            }
+          }
+          continue;
+        }
+
+        if (SOFT.has(code)) {
+          // Transparent gap: if inEvent, keep it open; if not inEvent, ignore
+          continue;
+        }
+
+        // Anything not NEG or SOFT is treated as HARD boundary for late segmentation.
+        if (inEvent) {
+          const paid = (code === "OK"); // first non-(D/NR) after event
+          flush(paid);
+        }
+      }
+
+      // End-of-history: if still in event, not paid
+      if (inEvent) flush(false);
+
+      return events;
+    };
+
+    const buildLateDisambiguousParentAccountString = (snap) => {
+      const lender = asStr(snap.lender || snap.companyName, "");
+      const acctNum = asStr(snap.accountNumber, "");
+      const loanType = asStr(snap.loanType, "");
+      const openDate = snap.openDate && typeof snap.openDate.toDate === "function"
+        ? snap.openDate.toDate().toISOString()
+        : asStr(snap.openDate, "");
+      return `${lender}|${acctNum}|${openDate}|${loanType}`;
+    };
+
+    // --- parserVersion from reportUploads/{uploadId} ---
+    let parserVersion = "";
+    try {
+      const uploadDoc = await db.doc(`users/${uid}/reportUploads/${uploadId}`).get();
+      if (uploadDoc.exists) {
+        const d = uploadDoc.data() || {};
+        parserVersion = asStr(d.parserVersion, "");
+      }
+    } catch (e) {
+      // Non-fatal; keep parserVersion blank
+      parserVersion = "";
+    }
+
+    // --- 1) Clear staging for this user ---
+    const deleteQuery = stagingCol.where('userRef', '==', userRef);
+    let deleted = 0;
+
+    while (true) {
+      const snap = await deleteQuery.limit(400).get();
+      if (snap.empty) break;
+
+      const batch = db.batch();
+      snap.docs.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+      deleted += snap.size;
+    }
+
+    // --- 2) Read snapshot docs for uploadId ---
+    const snapshotSnap = await snapsCol.get();
+
+    let stagedAccounts = 0;
+    let stagedInquiries = 0;
+    let stagedLates = 0;
+    let stagedCollectionsFromOrigin = 0;
+    let skipped = 0;
+
+    // We'll batch writes in chunks
+    let batch = db.batch();
+    let ops = 0;
+    const commitIfNeeded = async () => {
+      if (ops >= 400) {
+        await batch.commit();
+        batch = db.batch();
+        ops = 0;
+      }
+    };
+
+    // --- 2A) Stage accounts/inquiries from upload snapshots ---
+    for (const doc of snapshotSnap.docs) {
+      const snap = doc.data() || {};
+      const recordType = asStr(snap.recordType, "");
+
+      if (recordType === "account") {
+        const loanType = asStr(snap.loanType, "");
+        const isCard = loanType === "Credit Card";
+        const stock = isCard ? "user_credit_cards" : "user_loans";
+        const subStock = isCard ? "Revolving" : "Installment";
+
+        const lender = asStr(snap.lender || snap.companyName, "");
+        const name = asStr(snap.companyName || snap.lender, "");
+
+        // CHANGE #1: for LOANS ONLY, map highBalance -> creditLimit (fallback to creditLimit)
+        const rawLoanLimit = (snap.highBalance ?? snap.creditLimit);
+        const creditLimitVal = isCard
+          ? (snap.creditLimit == null ? null : asNum(snap.creditLimit, null))
+          : (rawLoanLimit == null ? null : asNum(rawLoanLimit, null));
+
+        const stagingDoc = {
+          userRef,
+          stock,
+          subStock,
+          lender,
+          name,
+          accountNumber: asStr(snap.accountNumber, ""),
+
+          isConfirmed: false,
+
+          // core fields
+          DOFRecord: snap.openDate || null,
+          creditLimit: creditLimitVal,
+          amountsOwed: snap.balance == null ? null : asNum(snap.balance, null),
+          isOpen: snap.closedDate ? false : true,
+
+          // defaults per spec
+          isCFA: false,
+          isAnnualFee: false,
+          apr: 0,
+          interestRate: null,
+          severity: "",
+          isPaid: null,
+          isCurrent: null,
+
+          collections_agency: "",
+
+          // provenance
+          stagingSource: "report_upload",
+          uploadID: uploadId,
+          parserVersion,
+
+          // docref-string fields
+          originDocRef: "",
+          lateOriginRef: "Irrelevant",
+
+          // only for late docs (null here)
+          lateDisambiguousParentAccountString: null,
+        };
+
+        const newRef = stagingCol.doc();
+        batch.set(newRef, stagingDoc);
+        ops++;
+        stagedAccounts++;
+        await commitIfNeeded();
+
+        // Derive lates
+        const lateEvents = deriveLateEvents(snap.paymentHistory);
+        if (lateEvents.length) {
+          const parentString = buildLateDisambiguousParentAccountString(snap);
+
+          for (let i = 0; i < lateEvents.length; i++) {
+            const ev = lateEvents[i];
+            const dof = tsFromMonthYear(ev.startMonth.year, ev.startMonth.month);
+
+            const lateStock = isCard
+              ? "user_credit_cards_late_payments"
+              : "user_loans_late_payments";
+
+            const lateDoc = {
+              userRef,
+              stock: lateStock,
+              subStock,
+
+              isConfirmed: false,
+
+              lender,
+              name,
+              accountNumber: asStr(snap.accountNumber, ""),
+
+              DOFRecord: dof,
+              severity: asStr(ev.severity, ""),
+              isPaid: !!ev.isPaid,
+              isCurrent: null,
+
+              amountsOwed: 0,     // user fills in UI
+              creditLimit: null,
+              isOpen: null,
+
+              apr: 0,
+              interestRate: null,
+              isCFA: false,
+              isAnnualFee: false,
+
+              originDocRef: "",
+              lateOriginRef: "Irrelevant",
+              collections_agency: "",
+
+              lateDisambiguousParentAccountString: parentString,
+
+              stagingSource: "report_upload",
+              uploadID: uploadId,
+              parserVersion,
+            };
+
+            const lateRef = stagingCol.doc();
+            batch.set(lateRef, lateDoc);
+            ops++;
+            stagedLates++;
+            await commitIfNeeded();
+          }
+        }
+
+        continue;
+      }
+
+      if (recordType === "inquiry") {
+        const lender = asStr(snap.lender, "");
+        const inquiryDoc = {
+          userRef,
+          stock: "hard_pull",
+          subStock: "Inquiry",
+          lender,
+          name: lender,
+          accountNumber: "",
+
+          isConfirmed: false,
+
+          DOFRecord: snap.inquiryDate || null,
+
+          isCurrent: null,
+          severity: "",
+          isPaid: null,
+
+          // keep schema consistent
+          creditLimit: null,
+          amountsOwed: null,
+          isOpen: null,
+          apr: 0,
+          interestRate: null,
+          isCFA: false,
+          isAnnualFee: false,
+
+          collections_agency: "",
+
+          stagingSource: "report_upload",
+          uploadID: uploadId,
+          parserVersion,
+
+          originDocRef: "",
+          lateOriginRef: "Irrelevant",
+
+          lateDisambiguousParentAccountString: null,
+        };
+
+        const newRef = stagingCol.doc();
+        batch.set(newRef, inquiryDoc);
+        ops++;
+        stagedInquiries++;
+        await commitIfNeeded();
+        continue;
+      }
+
+      // Skip collections + public records from upload snapshots (per spec)
+      skipped++;
+    }
+
+    // --- 2B) Stage origin collections (top-level) ---
+    // Per your update: top-level collection, filtered by userRef field
+    const originCollectionsSnap = await db
+      .collection('user_collections_3rd_party')
+      .where('userRef', '==', userRef)
+      .get();
+
+    for (const cDoc of originCollectionsSnap.docs) {
+      const c = cDoc.data() || {};
+
+      // Map from origin -> staging (per mappings.md semantics)
+      const lender = asStr(c.originalProvider, "");
+      const agency = asStr(c.collectionsAgency, "");
+      const name = asStr(c.name, lender);
+
+      const colStageDoc = {
+        userRef,
+        stock: "user_collections_3rd_party",
+        subStock: "Collection",
+
+        lender,
+        name,
+        accountNumber: "",
+
+        isConfirmed: false,
+
+        fellOffReport: (c.fellOffReport == null ? false : !!c.fellOffReport),
+
+        // collection fields
+        DOFRecord: c.DOFD || null,
+        amountsOwed: c.amount == null ? null : asNum(c.amount, null),
+        severity: "Collection",
+        isPaid: (c.isPaid == null ? null : !!c.isPaid),
+        isCurrent: null,
+
+        collections_agency: agency,
+
+        // keep schema consistent
+        creditLimit: null,
+        isOpen: null,
+        apr: null,
+        interestRate: null,
+        isCFA: false,
+        isAnnualFee: false,
+
+        // provenance
+        stagingSource: "origin_snapshot",
+        uploadID: uploadId,
+        parserVersion,
+
+        // string path to top-level origin doc
+        originDocRef: `user_collections_3rd_party/${cDoc.id}`,
+        lateOriginRef: "Irrelevant",
+
+        lateDisambiguousParentAccountString: null,
+      };
+
+      const newRef = stagingCol.doc();
+      batch.set(newRef, colStageDoc);
+      ops++;
+      stagedCollectionsFromOrigin++;
+      await commitIfNeeded();
+    }
+
+    if (ops > 0) await batch.commit();
+
+    return {
+      ok: true,
+      uploadId,
+      parserVersion,
+      deletedExistingStaging: deleted,
+      stagedAccounts,
+      stagedInquiries,
+      stagedLates,
+      stagedCollectionsFromOrigin,
+      skipped,
+      totalSnapshotDocsRead: snapshotSnap.size,
+      totalOriginCollectionsRead: originCollectionsSnap.size,
+    };
+  }
+);
