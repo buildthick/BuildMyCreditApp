@@ -27,6 +27,9 @@ loan lates	user_loans_late_payments	user_loans_late_payments	amount	amountsOwed	
 3rd party collections	user_collections_3rd_party	user_collections_3rd_party	collectionsAgency	collections_agency	TRUE	FALSE
 3rd party collections	user_collections_3rd_party	user_collections_3rd_party	DOFD	DOFRecord	TRUE	FALSE
 3rd party collections	user_collections_3rd_party	user_collections_3rd_party	isPaid	isPaid	FALSE	TRUE
+hard pulls	user_hard_pulls	hard_pull	lender	lender	TRUE	FALSE
+hard pulls	user_hard_pulls	hard_pull	dateOfRequest	DOFRecord	TRUE	FALSE
+						
 						
 						
 lateDisambiguousParentAccountString = lender+accountNumber+openDate+loanType						
